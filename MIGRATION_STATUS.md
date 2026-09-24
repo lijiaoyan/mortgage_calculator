@@ -226,7 +226,110 @@ The audit is complete, saved to `MIGRATION_AUDIT.md`, and verified against the a
 
 ---
 
-# Overall Migration Status (end of step 9 session)
+# Step 10 Detail
+
+## Step 10: Extra Payment Magic parity — ✅ COMPLETE (browser checks PENDING)
+
+**Scope honored:** The Extra Payment Magic tab was parity-hardened against the original `script.js#calculateMagic` using the tested `src/lib` modules. Built on the Step 8 component (markup, CSS classes, and aria attributes unchanged) without a rewrite of working parts. `src/lib/mortgage.js`, `amortization.js`, `validation.js`, `formatting.js`, `PaymentCalculator.jsx`, `index.html`, `style.css`, `privacy.html`, and the original `script.js` were **not** modified. No backend, no routing, no TypeScript, no styling framework. No push, merge, or deploy. Chart integration is untouched (Step 11).
+
+### Files created (this step)
+
+| File | Purpose |
+|------|---------|
+| `src/lib/extraPayment.js` | Pure, UI-free Extra Payment Magic derivation. Exports: `CORE_MAGIC_KEYS` (the original `calculateMagic(false)` listener set), `BLANK_MAGIC_RESULT` (sentinel matching the original static initial markup byte-for-byte), `applyPIAutoFill(inputs, {force, isFocused})` (the original `magicMonthlyPI` write-back as a pure function, focus guard included), and `deriveExtraPaymentResult(inputs, mode, piIsManual)` (the full displayed result: validation → contractual P&I from the ORIGINAL loan → baseline/accelerated `comparePayoffs` → all display strings + `limitWarning`) |
+| `src/lib/extraPayment.test.js` | 69 Vitest tests pinning the derivation to the baseline cases (B4/B5/B6/B7 with identical inputs), the Step 10 requirements (contractual P&I not recomputed from current balance; tax/insurance outside the simulation; 0% interest; oversized extras; small final payments; F7 non-payoff warnings; F4 term parity; F2 negative-extra non-crash; no NaN/Infinity anywhere), and the P&I auto-fill semantics |
+
+### Files modified (this step)
+
+| File | Change |
+|------|--------|
+| `src/components/ExtraPaymentCalculator.jsx` | Result is no longer stored in state: `deriveExtraPaymentResult(magicInputs, extraMode, piIsManual)` is recomputed on every render (Step 9 pattern; AGENTS.md "Do not store redundant calculated values in state"). New `piIsManual` flag state (event history — whether the P&I field holds a user-entered value) preserves the original `isPIOverride` semantics, including the subtlety that the simulation uses the **unrounded** calculated P&I whenever the original fill branch ran, even though the field displays the rounded value. Handlers: `handleMagicInput` (live recalc on every input, `force` = core field), `handleCalculate` / `selectExtraMode` (force, as the original `calculateMagic()` default), `handleMagicBlur` (the original's seven blur formatters — **restored, they were missing in Step 8**), tab-sync effect with the one-time latch removed. The term `<select>` is now uncontrolled (`defaultValue="30"`) dead UI, exactly as in the original. A new amber `role="status"` warning div (reusing `.error-msg` layout) renders `limitWarning`. DOM structure otherwise unchanged |
+| `src/App.jsx` | `handleSwitchTab` bumps `seedNonce` on **every** "Extra Payment Magic" nav click — including a re-click while already on that tab — matching the original `navExtra` handler, which re-ran the sync check on every click. One-line move + comment |
+
+### Parity restorations (Step 8 deviations re-checked against the original source)
+
+The Step 8 "Deviations" list and the F-decisions in `BASELINE_CASES.md` §F were re-verified against the pre-migration `script.js` / `index.html` (git `02af58e`). Per the Step 10 instruction, an earlier status note was **not** treated as approval of a behavior change:
+
+1. **Term select fallback (F4 / Step 8 note #2) — reverted to original.** Step 8 read `parseNumeric(magicTermText) || parseNumeric(magicTermSelect)`, gave the select a recalc listener, and had the tab sync write it. The original `getElementById('magicTerm')` returned the **first** element in document order — the text input — so the select was dead UI (no listeners, never read, never written). Restored: term comes from the text input only; the select is uncontrolled dead UI. **F4 remains an open decision** (remove the dead select, or make it drive the term) — no behavior change was made beyond restoring parity.
+2. **`magicMonthlyPI` focus guard (Step 8 note #1) — restored.** Step 8 claimed a focus guard "is not meaningful" for controlled inputs; it is: when the user focuses the P&I field and clears it, the original left the field empty (simulation uses the calculated P&I), while Step 8's code refilled it with the rounded value, forcing the user to delete digits before typing a manual payment. Restored via the retained `magicMonthlyPIRef` (passed as `isFocused` into the pure `applyPIAutoFill`).
+3. **Tab-sync one-time latch — removed.** Step 8's `didSync` useRef latched on the first seed event **even when the sync did nothing** (main price empty at that moment), so a later main→magic switch never synced. The original had no latch — it re-checked on every switch while the magic price was empty (and re-syncs if the user manually cleared the magic price). The "only once" effect came solely from the empty-price gate. The `App.jsx` seed-bump move (above) completes the parity.
+4. **Sync balance guard — removed.** Step 8 wrote `principal > 0 ? principal.toLocaleString('en-US') : ''`; the original wrote `principal.toLocaleString('en-US')` **unconditionally** (non-positive when down ≥ price; the validation gate then rejects the form). Restored.
+5. **Sync no longer touches the select** (Step 8 set `magicTermSelect: String(mainInputs.term || '30')`; the original never did).
+6. **Blur formatters restored** (baseline E8): the original attached thousands-separator `blur` formatters to `magicPrice`, `magicDownPayment`, `magicBalance`, `magicTax`, `magicInsurance`, `extraAmount`, `magicMonthlyPI` (reformat only, no recalc). Step 8's component had none. All seven restored.
+7. **Step 8 note #3 was factually wrong and is corrected here:** `runMagicDemo()` **is** called in the original — by the `navExtra` click handler whenever the magic price is empty (gated by `sessionStorage` `mpl_magic_demo_v4`, so once per session). "Switching to Magic with an empty price runs a typewriter demo" is real original behavior. It is **not ported in Step 10** — demo/animation work is explicitly Step 12's scope ("Reintroduce animations and the demo"), and Step 10's instruction did not include it. (The note's claim about `runDemoOnce()` being commented out in the main tab is correct; the main-tab typewriter placeholder is also Step 12.)
+
+### F7 implemented (approved in the Step 10 request, requirement 7)
+
+The original silently ran a non-amortizing or too-slow loan to the 600-month cap and displayed "50y 0m" as if it were a completed payoff. Now `deriveExtraPaymentResult` surfaces four warning tiers (amber warning div, `role="status"`), and truncated durations get a trailing `+` so "50y 0m+" cannot be read as a payoff date:
+
+1. Accelerated payment below the first month's interest (balance grows): "Your payment does not cover the first month's interest, so the balance would grow instead of shrinking. Increase your payment or extra payment."
+2. Baseline payment below first-month interest, extra keeps it amortizing: "Your current payment alone does not cover the first month's interest at this rate. The extra payment is what keeps the balance from growing."
+3. Accelerated amortizing but beyond 600 months: "Even with this extra payment, the loan is not fully paid off within the 50-year (600-month) simulation limit. Results are shown truncated at 600 months."
+4. Baseline beyond 600 months, accelerated pays off: "Your current payment does not fully pay off the loan within the 50-year (600-month) simulation limit, so the baseline figures are truncated at 600 months."
+
+In all four cases the green "you'll save … in total interest!" success message (which claims a completed payoff) is suppressed in favor of "Resolve the warning above to see your total interest savings." This is an **approved deviation** from the original (baseline F7).
+
+### Other documented deviations / preserved quirks
+
+- **Validation-error display:** on a validation error the result cards now reset to the all-sentinel values (`$0` / "30 Years" / "Enter your details to see the magic happen!"), consistent with the Step 9 main-calculator behavior. The original kept the previously displayed (stale) values on error. Deliberate cross-tab consistency choice; flagged in the manual checks below.
+- **Down ≥ price with a positive balance (original quirk, preserved):** the contractual P&I is derived from `price − downPayment`, so with down ≥ price it is `$0` (`monthlyPayment` returns 0 for non-positive principal). The original then simulated with a $0 P&I and silently showed "50y 0m". The React version runs the identical simulation and surfaces it via F7 warning tier 1; a user-entered manual P&I is honored as in the original (tested: `100,000` balance + manual `1,000` P&I → "12y 1m").
+- **% mode sync quirk (preserved):** the tab sync copies the raw down-payment string, so in `$/%` mode the percentage number (e.g. "20") lands in the magic tab's dollar-only down field, and `magicBalance = price − 20` — exactly as the original did.
+- **F2 (negative extra, unresolved — preserved, no behavior change):** the extra field is not validated; a negative extra flows into the simulation (tested: no crash, no NaN/Infinity, payoff never shorter than the no-extra baseline, interest-saved display clamped at $0).
+- **F5 (core-field edit overwrites manual P&I, unresolved — preserved):** both force paths (core edit, button, mode toggle) re-derive and rewrite the P&I field, as in the original.
+- **F4 (unresolved — parity restored, decision still needed):** see #1 above.
+- **F7 (resolved):** implemented as above.
+
+### Verification (actual commands and results)
+
+| Check | Method | Result |
+|-------|--------|--------|
+| Dependencies install reproducibly | `npm ci` (fresh; `node_modules` was absent in this environment) | **PASS** — 0 vulnerabilities |
+| Full unit suite | `npm test` | **PASS** — 3 files, **137/137** (`mortgage.test.js` 46, `amortization.test.js` 22, `extraPayment.test.js` 69) |
+| Baseline B4–B7 identical inputs | Vitest assertions on `deriveExtraPaymentResult` + independent Node cross-check against `BASELINE_CASES.md` | **PASS** — B4: 30y 0m → 23y 5m, $105,429 saved, "6 years and 7 months", $408,142 → $302,714, PITI $2,581; B5: 27y 5m, $53,943, "2 years and 7 months", → $354,199; B6: 11y 10m → 10y 4m, $12,228, $87,189 → $74,960; B7: 30y 0m both, $0, "0 months" — all byte-identical to the baseline references |
+| Contractual P&I not recomputed from current balance | Vitest (B6 keeps $2,581 PITI at a $200k balance; a new-loan recompute would show ~$1,114) | **PASS** |
+| Tax/insurance outside the simulation | Vitest (tax/insurance changes alter only `newTotalMonthly`) | **PASS** |
+| F7 warning tiers (1)–(4) | Vitest (non-amortizing; baseline-grows; both-truncated; baseline-truncated) | **PASS** — correct tier, "50y 0m+" markers, success message suppressed |
+| No NaN/Infinity in any display string | Vitest grid (9 input variants × 2 modes × 2 P&I flags) | **PASS** |
+| Production build | `npm run build` | **PASS** — 24 modules; `dist/index.html` 18.96 kB, `index-*.js` 245.79 kB (gzip 75.02), `index-*.css` 10.00 kB, `preview-*.png` 585.97 kB; no warnings |
+| No duplicate HTML IDs in built page | `grep -oE 'id="[^"]+"' dist/index.html \| sort \| uniq -c` | **PASS** — single occurrence for every ID (`tips`, `navExtra`, `navCalc`, `guide`, `getStartedBtn`, `extra-magic-guide`, `calculator-root`) |
+| `script.js` not loaded | `grep -cE '<script[^>]*src="[^"]*script\.js"' dist/index.html` | **PASS** — 0 |
+| Step 10 markers in bundle | `grep -cF` over `dist/assets/index-*.js` | **PASS** — `magicTermText`, `Calculate Savings`, both F7 warning strings, `Please enter valid mortgage details.`, `Resolve the warning above`, `calculator-root` all present |
+| Static SEO/JSON-LD preserved | `grep -c 'id="guide"\|id="extra-magic-guide"\|id="tips"\|JSON-LD\|schema.org'` + `ld+json` count | **PASS** — 6 matches, 2 JSON-LD blocks (same as Step 9) |
+| Dev-server transform | `npm run dev` (port 5199) + `curl` of `/`, `main.jsx`, `App.jsx`, `ExtraPaymentCalculator.jsx`, `extraPayment.js`, `amortization.js`, `navBridge.js` | **PASS** — all 200, no transform errors in the log |
+| Built output served | `npm run preview` (port 5198) + `curl` of page and bundle | **PASS** — 200/200 |
+| No push/merge/deploy | none issued | **PASS** |
+
+### Manual browser checks (PENDING — this agent has no browser access)
+
+Exact inputs and expected results. The math is already pinned by the automated checks; a human only needs to confirm display/interaction parity.
+
+1. **B4 (sync + monthly extra):** Main tab: Home Price `400,000`, Down `80,000`, Rate `6.5`, Term `30`, Tax `5,500`, Ins `1,200` → click **Extra Payment Magic**. Expect (C10a sync): magic fields auto-filled — price `400,000`, down `80,000`, balance `320,000`, rate `6.5`, term text `30`, tax `5,500`, ins `1,200`, P&I field auto-filled `2,023`; result shows the extra-0 case (30y 0m / $0). Then type `200` in Extra Payment (Monthly): **Total Interest Saved $105,429 · Time Saved 6 years and 7 months · Normally Remaining 30y 0m · New Payoff Time 23y 5m · Original Interest $408,142 · New Total Interest $302,714 · New Monthly PITI $2,581** · green "By paying $200 extra every month, you'll save $105,429 in total interest!"
+2. **B5 (one-time):** switch toggle to **One-time**, Extra `10,000` → New Payoff Time **27y 5m**, saved **$53,943**, "2 years and 7 months", New Total Interest **$354,199**, message says "extra one-time".
+3. **B6 (lower balance):** Current Balance `200,000`, Extra `200` (Monthly) → **11y 10m → 10y 4m**, saved **$12,228**, "1 year and 6 months", **$87,189 → $74,960**.
+4. **B7 (zero extra):** Extra `0` → **30y 0m on both**, saved **$0**, "0 months", "Increase your extra payment to see how much you can save!"
+5. **C10b (no reverse sync):** after #1–#4, edit a Magic value, switch back to **Calculator** → main-tab values unchanged.
+6. **Re-sync (latch removed):** clear the Magic Home Price field, switch to Main and back → Magic re-syncs from Main (original had no one-time latch).
+7. **P&I focus guard (restored):** focus Monthly P&I, clear it → field stays **empty** (no auto-refill), results still use the calculated P&I; type `2500` → manual P&I used (balance `320,000` → Normally Remaining **18y 3m**).
+8. **F5 (preserved):** with manual P&I `2500`, change the Interest Rate (core field) → P&I field is overwritten with the recalculated rounded value (e.g. `2,023`) and results use the calculated P&I.
+9. **F7 warning tier 1:** Magic: price `500,000`, down `0`, balance `500,000`, rate `24`, term `30`, P&I `5,000`, extra `0` → amber warning "Your payment does not cover the first month's interest…", both durations **50y 0m+**, no green success message.
+10. **F7 warning tier 3:** price `1,000,000`, down `0`, balance `2,000,000`, rate `3`, term `30`, P&I `5,001`, extra `0` → amber "…not fully paid off within the 50-year (600-month) simulation limit…", both **50y 0m+**.
+11. **F7 warning tier 4:** same as #10 but Extra `1,500` (Monthly) → Normally Remaining **50y 0m+**, New Payoff Time **49y 0m**, warning names the truncated baseline.
+12. **Validation:** clear the Magic Home Price → "Please enter valid mortgage details." + result cards reset to the sentinel values ($0 / 30 Years / "Enter your details to see the magic happen!"). (Note: the original kept stale values here — confirm this reset is acceptable; see "Other documented deviations".)
+13. **Blur formatting (restored):** type `400000` in Magic Home Price, click away → field rewrites to `400,000` (same for balance, down, tax, insurance, extra, P&I).
+14. **Dead select (F4 parity):** change the second "Loan Term (Years)" dropdown → no effect on any result; the "Original Loan Term (Years)" text field drives the calculation (blank text term → validation error even though the select says 30).
+15. **Tab-switch state preservation:** fill Magic, switch to Calculator and back → Magic inputs and last result intact.
+
+### Blockers
+
+**None.** Step 11 (chart) is independent of this step.
+
+### Next task
+
+Step 11 — Integrate the chart (replace the Chart.js CDN donut on the main tab with `chart.js` + `react-chartjs-2` in `PaymentChart`; the Magic tab has no chart).
+
+---
+
+# Overall Migration Status (end of step 10 session)
 
 | Step | Status |
 |------|--------|
@@ -238,5 +341,6 @@ The audit is complete, saved to `MIGRATION_AUDIT.md`, and verified against the a
 | 6 — Node/Vite setup | ✅ |
 | 7 — Extract & test calculation modules | ✅ |
 | 8 — React-ify the calculator area | ✅ |
-| 9 — Interactive parity (main calculator) | ✅ (this session) |
-| 10–16 | ⏳ |
+| 9 — Interactive parity (main calculator) | ✅ |
+| 10 — Extra Payment Magic parity | ✅ (this session; browser checks PENDING) |
+| 11–16 | ⏳ |

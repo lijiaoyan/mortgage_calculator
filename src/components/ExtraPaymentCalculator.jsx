@@ -1,49 +1,53 @@
-// Step 8: Extra Payment Magic tab.
+// Step 10: Extra Payment Magic tab — parity-hardened, derived-on-render.
 //
-// All extra-payment state lives in this component (magic* fields, extra
-// mode, magic result/error). Shared main-tab inputs arrive as props for
-// the one-time main → magic sync that the original script.js did on
-// "Extra Payment Magic" nav-link click (only when the magic form's price
-// field was empty on first switch, latched via didSync useRef).
+// Step 8 created this tab. Step 10 completes its parity work:
 //
-// The calculation mirrors script.js#calculateMagic verbatim, via the
-// Step-7 pure modules. `isPIOverride` semantics are preserved: core
-// fields (price, down, rate, term) trigger P&I recalculation; balance/
-// tax/insurance/extra / manual P&I fields preserve a user-entered P&I.
+//   1. The displayed result is now derived on every render from the raw
+//      field strings + extra mode + P&I-override flag by the pure
+//      `deriveExtraPaymentResult` (src/lib/extraPayment.js) — the same
+//      derive-on-render pattern Step 9 applied to the main calculator,
+//      and AGENTS.md's "Do not store redundant calculated values in
+//      state". No `result` object is stored in state.
 //
-// Fidelity notes:
-//   - The original savingsMessage used innerHTML when positive (with
-//     <strong> markup) and textContent otherwise. We preserve the same
-//     distinction with a `savingsIsHtml` flag driving
-//     dangerouslySetInnerHTML vs. plain-text rendering.
-//   - savedPositive keys on `interestSaved > 0`, matching the original
-//     exactly.
+//   2. Decision F7 (approved in the Step 10 request): a simulation that
+//      hits the 600-month cap without paying off — or a payment that
+//      does not cover the first month's interest — is surfaced as an
+//      explicit `limitWarning` with a trailing '+' on the truncated
+//      duration, so an unpaid loan is never presented as fully paid off.
+//
+//   3. Parity restorations against the original script.js:
+//      - the `magicMonthlyPI` focus guard (the original never overwrote
+//        a focused field) is restored via the ref;
+//      - the loan term is read from the text input ONLY — the original
+//        `getElementById('magicTerm')` returned the first element in
+//        document order (the text input); the select was dead UI
+//        (decision F4, unresolved);
+//      - the tab sync re-runs on EVERY switch to this tab while the
+//        magic price field is empty (the original navExtra handler had
+//        no one-time latch), writes the raw principal unconditionally,
+//        and never touches the dead select;
+//      - the original blur formatters (thousands separators on the
+//        seven currency fields, no recalculation) are restored.
+//
+//   4. Documented deviations (see MIGRATION_STATUS.md, Step 10):
+//      - a validation error resets the result cards to the all-sentinel
+//        values (consistent with the Step 9 main calculator; the
+//        original kept previously displayed values on error);
+//      - the sessionStorage-gated magic demo is NOT ported yet — it is
+//        Step 12's scope. (Step 8 note #3 was wrong to say it was
+//        unreachable in the original: the navExtra handler called
+//        runMagicDemo() whenever the magic price was empty.)
+//
+// The DOM structure, CSS classes, and aria attributes are unchanged from
+// Step 8 / the original index.html.
 
 import { useEffect, useRef, useState } from 'react';
+import { parseNumeric } from '../lib/validation.js';
 import {
-  parseNumeric,
-  parseInterestRate,
-} from '../lib/validation.js';
-import { calculateMortgage } from '../lib/mortgage.js';
-import { simulatePayoff } from '../lib/amortization.js';
-import {
-  formatCurrency,
-  formatDurationSpan,
-  formatShortDuration,
-} from '../lib/formatting.js';
-
-const INITIAL_RESULT = {
-  interestSaved: '$0',
-  timeSaved: '0 years',
-  standardRemaining: '30 Years',
-  newPayoffTime: '30 Years',
-  originalInterest: '$0',
-  newTotalInterest: '$0',
-  newTotalMonthly: '$0',
-  savingsMessage: 'Enter your details to see the magic happen!',
-  savingsColor: 'inherit',
-  savingsIsHtml: false,
-};
+  deriveExtraPaymentResult,
+  applyPIAutoFill,
+  CORE_MAGIC_KEYS,
+} from '../lib/extraPayment.js';
 
 export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
   const [magicInputs, setMagicInputs] = useState({
@@ -52,155 +56,111 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
     magicBalance: '',
     magicRate: '',
     magicTermText: '',
-    magicTermSelect: '30',
     magicTax: '',
     magicInsurance: '',
     magicMonthlyPI: '',
     extraAmount: '',
   });
   const [extraMode, setExtraMode] = useState('monthly');
-  const [magicErrorMsg, setMagicErrorMsg] = useState('');
-  const [result, setResult] = useState(INITIAL_RESULT);
+  // Whether the P&I field currently holds a user-entered value the
+  // original would honor (a calculateMagic(true) event with value > 0).
+  // The simulation must use the UNROUNDED calculated P&I whenever this
+  // is false — even when the field displays the rounded auto-filled
+  // value — exactly as the original used `calculatedPI` whenever its
+  // fill branch ran.
+  const [piIsManual, setPiIsManual] = useState(false);
   const magicMonthlyPIRef = useRef(null);
-  const didSync = useRef(false);
 
-  function calculate(inputs, calcMode, isPIOverride) {
-    setMagicErrorMsg('');
+  // Derived on every render — never stored (AGENTS.md / Step 9 pattern).
+  // The magic tab recalculated live on every input in the original, so
+  // the draft strings are the derivation inputs.
+  const result = deriveExtraPaymentResult(magicInputs, extraMode, piIsManual);
 
-    const price = parseNumeric(inputs.magicPrice);
-    const downPayment = parseNumeric(inputs.magicDownPayment);
-    const currentBalanceInput = parseNumeric(inputs.magicBalance);
-    const ratePercent = parseNumeric(inputs.magicRate);
-    const termYearsRaw =
-      parseNumeric(inputs.magicTermText) ||
-      parseNumeric(inputs.magicTermSelect);
-    const extraPayment = parseNumeric(inputs.extraAmount);
-    const monthlyTax = parseNumeric(inputs.magicTax) / 12;
-    const monthlyInsurance = parseNumeric(inputs.magicInsurance) / 12;
-
-    const originalPrincipal = price - downPayment;
-    const startingBalance =
-      currentBalanceInput > 0 ? currentBalanceInput : originalPrincipal;
-
-    const rawRateNumber = parseInterestRate(inputs.magicRate);
-    if (
-      price <= 0 ||
-      (currentBalanceInput <= 0 && downPayment >= price) ||
-      !(rawRateNumber >= 0) ||
-      !(termYearsRaw > 0)
-    ) {
-      setMagicErrorMsg('Please enter valid mortgage details.');
-      return;
-    }
-
-    const calculatedPI =
-      calculateMortgage({
-        price,
-        downPayment,
-        annualRatePercent: ratePercent,
-        termYears: termYearsRaw,
-      }).monthlyPI;
-
-    let standardMonthlyPI = parseNumeric(inputs.magicMonthlyPI);
-    if (standardMonthlyPI <= 0 || !isPIOverride) {
-      standardMonthlyPI = calculatedPI;
-      const roundedStr = Math.round(standardMonthlyPI).toLocaleString();
-      if (inputs.magicMonthlyPI !== roundedStr) {
-        setMagicInputs((prev) => ({ ...prev, magicMonthlyPI: roundedStr }));
-      }
-    }
-
-    const isMonthly = calcMode === 'monthly';
-    const baseline = simulatePayoff({
-      startingBalance,
-      contractualMonthlyPI: standardMonthlyPI,
-      annualRatePercent: ratePercent,
-      monthlyExtra: 0,
-      oneTimeExtra: 0,
-    });
-    const accelerated = simulatePayoff({
-      startingBalance,
-      contractualMonthlyPI: standardMonthlyPI,
-      annualRatePercent: ratePercent,
-      monthlyExtra: isMonthly ? extraPayment : 0,
-      oneTimeExtra: !isMonthly ? extraPayment : 0,
-    });
-
-    const baselineInterest = baseline.totalInterest;
-    const baselineMonths = baseline.months;
-    const newTotalInterest = accelerated.totalInterest;
-    const monthsToPayoff = accelerated.months;
-
-    const interestSaved = baselineInterest - newTotalInterest;
-    const monthsSaved = baselineMonths - monthsToPayoff;
-
-    const savedPositive = interestSaved > 0;
-    setResult({
-      interestSaved: formatCurrency(Math.max(0, interestSaved)),
-      timeSaved: formatDurationSpan(monthsSaved),
-      standardRemaining: formatShortDuration(baselineMonths),
-      newPayoffTime: formatShortDuration(monthsToPayoff),
-      originalInterest: formatCurrency(baselineInterest),
-      newTotalInterest: formatCurrency(newTotalInterest),
-      newTotalMonthly: formatCurrency(standardMonthlyPI + monthlyTax + monthlyInsurance),
-      savingsMessage: savedPositive
-        ? `By paying <strong>${formatCurrency(extraPayment)}</strong> extra ${
-            isMonthly ? 'every month' : 'one-time'
-          }, you'll save <strong>${formatCurrency(interestSaved)}</strong> in total interest!`
-        : 'Increase your extra payment to see how much you can save!',
-      savingsColor: savedPositive ? 'var(--secondary)' : 'inherit',
-      savingsIsHtml: savedPositive,
-    });
+  function piIsFocused() {
+    return (
+      typeof document !== 'undefined' &&
+      document.activeElement === magicMonthlyPIRef.current
+    );
   }
 
-  function updateMagicInput(key, value) {
+  // Original: every `input` on a magic field re-ran calculateMagic —
+  // calculateMagic(false) for the core fields, calculateMagic(true) for
+  // the rest. The term select is dead UI (no listener in the original).
+  function handleMagicInput(key, value) {
     const next = { ...magicInputs, [key]: value };
-    setMagicInputs(next);
-
-    const isCore =
-      key === 'magicPrice' ||
-      key === 'magicDownPayment' ||
-      key === 'magicRate' ||
-      key === 'magicTermText' ||
-      key === 'magicTermSelect';
-    calculate(next, extraMode, !isCore);
+    const isCore = CORE_MAGIC_KEYS.has(key);
+    const { inputs: filled, filledPI } = applyPIAutoFill(next, {
+      force: isCore,
+      isFocused: piIsFocused(),
+    });
+    setMagicInputs(filled);
+    setPiIsManual(!isCore && !filledPI && parseNumeric(filled.magicMonthlyPI) > 0);
   }
 
+  // Original `magicCalcBtn` click: calculateMagic() → isPIOverride=false
+  // → contractual P&I re-derived and the field rewritten (unless focused).
   function handleCalculate() {
-    calculate(magicInputs, extraMode, false);
+    const { inputs: filled } = applyPIAutoFill(magicInputs, {
+      force: true,
+      isFocused: piIsFocused(),
+    });
+    if (filled !== magicInputs) setMagicInputs(filled);
+    setPiIsManual(false);
   }
 
+  // Original extraMonthlyBtn / extraOneTimeBtn: set extraMode, then
+  // calculateMagic() (isPIOverride=false) with the new mode in effect.
   function selectExtraMode(mode) {
     if (mode === extraMode) return;
     setExtraMode(mode);
-    calculate(magicInputs, mode, false);
+    const { inputs: filled } = applyPIAutoFill(magicInputs, {
+      force: true,
+      isFocused: piIsFocused(),
+    });
+    if (filled !== magicInputs) setMagicInputs(filled);
+    setPiIsManual(false);
   }
 
-  // One-time main → magic sync.
+  // Original blur listeners on the seven currency fields: reformat with
+  // thousands separators (en-US) without recalculating.
+  function handleMagicBlur(key, rawValue) {
+    const val = parseNumeric(rawValue);
+    if (val > 0) {
+      setMagicInputs((prev) => ({ ...prev, [key]: val.toLocaleString('en-US') }));
+    }
+  }
+
+  // One-way Calculator → Magic sync. Re-run on EVERY switch to this tab
+  // (the original navExtra handler had no latch; the "only once" effect
+  // came from the "magic price must be empty" gate, so a manually
+  // cleared magic price re-syncs on the next switch — preserved).
   useEffect(() => {
     if (seedNonce <= 0) return;
-    if (didSync.current) return;
-    didSync.current = true;
-
     const mainPrice = parseNumeric(mainInputs.price);
     if (mainPrice <= 0) return;
     if (parseNumeric(magicInputs.magicPrice) > 0) return;
 
-    const down = parseNumeric(mainInputs.downPayment);
-    const principal = mainPrice - down;
+    // Original: magicBalance.value = principal.toLocaleString('en-US')
+    // unconditionally (it can be non-positive when down ≥ price); the
+    // validation gate below then rejects the form.
+    const principal = mainPrice - parseNumeric(mainInputs.downPayment);
     const next = {
       ...magicInputs,
       magicPrice: mainInputs.price,
       magicDownPayment: mainInputs.downPayment,
-      magicBalance: principal > 0 ? principal.toLocaleString('en-US') : '',
+      magicBalance: principal.toLocaleString('en-US'),
       magicRate: mainInputs.rate,
       magicTermText: String(mainInputs.term || ''),
-      magicTermSelect: String(mainInputs.term || '30'),
       magicTax: mainInputs.tax,
       magicInsurance: mainInputs.insurance,
     };
-    setMagicInputs(next);
-    calculate(next, extraMode, false);
+    // Original: calculateMagic() → isPIOverride=false.
+    const { inputs: filled } = applyPIAutoFill(next, {
+      force: true,
+      isFocused: piIsFocused(),
+    });
+    setMagicInputs(filled);
+    setPiIsManual(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedNonce]);
 
@@ -240,7 +200,7 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
                 placeholder="30"
                 aria-label="Original Loan Term"
                 value={magicInputs.magicTermText}
-                onChange={(e) => updateMagicInput('magicTermText', e.target.value)}
+                onChange={(e) => handleMagicInput('magicTermText', e.target.value)}
               />
             </div>
           </div>
@@ -270,7 +230,8 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
                 aria-label="Monthly Principal and Interest"
                 value={magicInputs.magicMonthlyPI}
                 ref={magicMonthlyPIRef}
-                onChange={(e) => updateMagicInput('magicMonthlyPI', e.target.value)}
+                onChange={(e) => handleMagicInput('magicMonthlyPI', e.target.value)}
+                onBlur={(e) => handleMagicBlur('magicMonthlyPI', e.target.value)}
               />
             </div>
           </div>
@@ -285,7 +246,8 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
               placeholder="515,000"
               aria-label="Current Loan Balance"
               value={magicInputs.magicBalance}
-              onChange={(e) => updateMagicInput('magicBalance', e.target.value)}
+              onChange={(e) => handleMagicInput('magicBalance', e.target.value)}
+              onBlur={(e) => handleMagicBlur('magicBalance', e.target.value)}
             />
           </div>
         </div>
@@ -301,7 +263,8 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
                 placeholder="600,000"
                 aria-label="Home Purchase Price"
                 value={magicInputs.magicPrice}
-                onChange={(e) => updateMagicInput('magicPrice', e.target.value)}
+                onChange={(e) => handleMagicInput('magicPrice', e.target.value)}
+                onBlur={(e) => handleMagicBlur('magicPrice', e.target.value)}
               />
             </div>
           </div>
@@ -315,7 +278,8 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
                 placeholder="105,000"
                 aria-label="Down Payment Amount"
                 value={magicInputs.magicDownPayment}
-                onChange={(e) => updateMagicInput('magicDownPayment', e.target.value)}
+                onChange={(e) => handleMagicInput('magicDownPayment', e.target.value)}
+                onBlur={(e) => handleMagicBlur('magicDownPayment', e.target.value)}
               />
             </div>
           </div>
@@ -329,7 +293,7 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
                 placeholder="6.5"
                 aria-label="Annual Interest Rate"
                 value={magicInputs.magicRate}
-                onChange={(e) => updateMagicInput('magicRate', e.target.value)}
+                onChange={(e) => handleMagicInput('magicRate', e.target.value)}
               />
             </div>
           </div>
@@ -340,11 +304,14 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
             <label htmlFor="magicTermSelect">Loan Term (Years)</label>
             <div className="input-wrapper">
               <i className="fas fa-calendar-alt"></i>
+              {/* Dead control, exactly as in the original: the duplicated
+                  id="magicTerm" meant getElementById always returned the
+                  text input above, and the select had no listeners. It is
+                  intentionally uncontrolled and never read (F4). */}
               <select
                 id="magicTermSelect"
+                defaultValue="30"
                 aria-label="Loan Term in Years"
-                value={magicInputs.magicTermSelect}
-                onChange={(e) => updateMagicInput('magicTermSelect', e.target.value)}
               >
                 <option value="15">15 Years</option>
                 <option value="30">30 Years</option>
@@ -363,7 +330,8 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
                 placeholder="5,500"
                 aria-label="Annual Property Tax"
                 value={magicInputs.magicTax}
-                onChange={(e) => updateMagicInput('magicTax', e.target.value)}
+                onChange={(e) => handleMagicInput('magicTax', e.target.value)}
+                onBlur={(e) => handleMagicBlur('magicTax', e.target.value)}
               />
             </div>
           </div>
@@ -380,7 +348,8 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
                 placeholder="1,200"
                 aria-label="Annual Homeowners Insurance"
                 value={magicInputs.magicInsurance}
-                onChange={(e) => updateMagicInput('magicInsurance', e.target.value)}
+                onChange={(e) => handleMagicInput('magicInsurance', e.target.value)}
+                onBlur={(e) => handleMagicBlur('magicInsurance', e.target.value)}
               />
             </div>
           </div>
@@ -417,7 +386,8 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
                 placeholder="200"
                 aria-label="Extra Payment Amount"
                 value={magicInputs.extraAmount}
-                onChange={(e) => updateMagicInput('extraAmount', e.target.value)}
+                onChange={(e) => handleMagicInput('extraAmount', e.target.value)}
+                onBlur={(e) => handleMagicBlur('extraAmount', e.target.value)}
               />
             </div>
           </div>
@@ -437,9 +407,23 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
         <div
           className="error-msg"
           role="alert"
-          style={magicErrorMsg ? { display: 'block' } : { display: 'none' }}
+          style={result.errorMsg ? { display: 'block' } : { display: 'none' }}
         >
-          {magicErrorMsg}
+          {result.errorMsg}
+        </div>
+        {/* F7 (approved): explicit non-payoff warning for non-amortizing
+            payments and the 600-month simulation limit. Reuses the
+            .error-msg layout with an amber (non-error) palette. */}
+        <div
+          className="error-msg"
+          role="status"
+          style={
+            result.limitWarning
+              ? { display: 'block', background: 'rgba(245, 158, 11, 0.12)', color: '#f59e0b' }
+              : { display: 'none' }
+          }
+        >
+          {result.limitWarning}
         </div>
       </article>
 
