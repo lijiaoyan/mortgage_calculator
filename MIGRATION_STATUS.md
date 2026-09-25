@@ -742,7 +742,77 @@ Step 16 — Remove obsolete code and update documentation (per `MIGRATION_PLAN.m
 
 ---
 
-# Overall Migration Status (end of step 15 session)
+# Step 16 Detail
+
+## Step 16: Remove obsolete code and update documentation — ✅ COMPLETE
+
+**Scope honored:** After Step 14 confirmed feature parity (92/92 against the executed original), the unused legacy `script.js` was removed, the CDN dependency audit found **no unused CDN to remove** (both remaining CDNs are live dependencies), two stray files that had been committed by accident in Step 8 were deleted, one stale comment in `index.html` was updated, one accidental `.gitignore` entry was removed, and `README.md` was rewritten to match the React/Vite reality. No application code was modified — `src/`, `style.css`, `public/`, `package.json`, `vite.config.js`, and the deploy workflow are untouched. No push, merge, or deploy.
+
+### Files deleted (this step)
+
+| File | Why it went |
+|------|-------------|
+| `script.js` | The legacy vanilla-JS reference implementation. Kept since Step 8 solely for the Step 14 side-by-side parity run, which completed with 92/92 matching display strings. Not loaded from `index.html` since Step 8; referenced by no `package.json` script, no `vite.config.js` setting, no `public/` file. Only remaining mentions are provenance comments in `src/` (deliberately kept — they document where each behavior was ported from) and the migration documents (historical record, per the plan). |
+| `Users/Watson/Documents/workspace/superinterface/src/components/ui/sheet.tsx` | Stray file from an unrelated project (someone's macOS home-directory path), committed by accident in Step 8 (`6bc5266`). Zero references anywhere in the repo. |
+| `qwen-tool-test.txt` | Tool-test artifact ("Qwen existing-file editing succeeded."), committed by accident in Step 8 (`6bc5266`). Zero references anywhere in the repo. |
+
+### Reference search (performed before deleting, as required)
+
+- `grep -rn "script.js"` across the repo (excluding `node_modules`/`dist`): hits in `index.html` (an HTML comment), `src/*` (comments/JSDoc only — verified line-by-line, none are imports, `require`, `<script src>`, or config references), and the migration documents (historical). No load path existed.
+- `grep` for `qwen-tool-test`, `superinterface`, `sheet.tsx`: zero references outside the files themselves.
+- `package.json` scripts: only `dev`/`build`/`preview`/`test` (all Vite/Vitest); no reference to `script.js`.
+
+### CDN dependency audit (no unused CDN found)
+
+| CDN | Status | Evidence |
+|-----|--------|----------|
+| Font Awesome 6.4.0 (cdnjs) | **In use — kept** | 10 `fa-`/`fas` usages in `index.html`, 8 in `PaymentCalculator.jsx`, 14 in `ExtraPaymentCalculator.jsx` |
+| Google Fonts — Outfit + Inter | **In use — kept** | `@import` at the top of `style.css`; `font-family: 'Outfit'`/`'Inter'` declarations throughout |
+| Chart.js (jsDelivr) | **Already removed in Step 11** | 0 matches in `index.html`/`dist` (regression-guarded since) |
+
+No other third-party `<script>`/`<link>` exists in `index.html` or `public/` (verified by grep). The two kept CDNs are the same two the pre-migration page requested, and both are disclosed in the Step 13 privacy wording.
+
+### Files modified (this step)
+
+| File | Change |
+|------|--------|
+| `index.html` | The stale Step 8 comment ("script.js is kept in the repo only for Step 14 parity checks; Step 16 removes it") updated to record that the removal now happened, post Step 14 verification. Nothing else touched. |
+| `.gitignore` | Removed a stray single-character `y` entry (accidental keystroke from the Step 6 edit; it would have ignored a file literally named `y`). All real entries preserved. |
+| `README.md` | Rewritten to match the repository (the plan's full list): Tech Stack now React 19 + Vite 8 + bundled chart.js/react-chartjs-2 + Vitest (was "vanilla JavaScript, no framework" + "Chart.js (CDN)"); the obsolete "No build step, no dependencies to install, no `package.json`" note removed; Project Structure updated (real `src/` breakdown, `package.json`/`package-lock.json`, migration documents; `script.js` line removed); Getting Started replaced (was "open index.html") with the Node requirement (`^20.19.0` or `>=22.12.0`, Node 22 LTS recommended — matching CI and the Vite `engines` field) and all five npm commands (`install`/`dev`/`test`/`build`/`preview`); Deployment now mentions the `npm test` CI step and that `workflow_dispatch` is `v1`-only; the "Privacy-First" claim re-scoped to match the Step 13 privacy-page wording (financial data processed locally, never transmitted; the two CDN font/icon requests disclosed); the main-calculator "real-time recalculation as you type" bullet corrected to button-driven (parity-verified in Step 14) with real-time recalculation attributed to the Magic tab where it is true; Contributing updated (AGENTS.md rules, npm commands instead of "open index.html"). How-the-Math-Works, SEO checklist, disclaimers, and the 600-month guard (now also noting the explicit warning) carried over. |
+
+### Verification (actual commands and results)
+
+| Check | Method | Result |
+|-------|--------|--------|
+| Full unit suite after deletions | `npm test` | **PASS** — 6 files, **162/162** |
+| Clean production build | `rm -rf dist && npm run build` | **PASS** — 29 modules, no warnings; `dist/index.html` 18.98 kB (gzip 5.11), `index-BrptsVus.js` 406.24 kB (gzip 130.41), `index-W1v8K94i.css` 10.00 kB — **asset hashes byte-identical to the Step 14/15 verified builds**, proving the deletion changed nothing in the output |
+| No obsolete code loaded | grep of `index.html`, `public/`, `package.json`, `vite.config.js` for `script.js` | **PASS** — 0 load references; the only `index.html` mention is the updated historical comment |
+| `dist/` contents | `find dist -type f` | **PASS** — exactly 9 files: `index.html`, 2 hashed assets, `CNAME`, `robots.txt`, `sitemap.xml`, `googleb4f539193a03794c.html`, `preview.png`, `privacy.html` |
+| CDN audit | grep for `fa-`/`fas`, `googleapis`, `cdn`, `jsdelivr` over `index.html`, `src/`, `style.css`, `public/` | **PASS** — Font Awesome + Google Fonts both actively used (kept); no Chart.js CDN; no other third-party resource |
+| Stray files unreferenced | grep for `qwen-tool-test`/`superinterface`/`sheet.tsx` | **PASS** — 0 references |
+| README matches the repo | Read against `package.json` scripts, Vite `engines`, actual tree | **PASS** — every documented command exists in `package.json`; Node requirement matches `engines: ^20.19.0 \|\| >=22.12.0`; structure tree matches the working tree; no "no build step" / "no package.json" claim remains |
+| Git diff is only the intended files | `git status --short` | **PASS** — `script.js` D, `Users/…` D, `qwen-tool-test.txt` D, `index.html` M, `.gitignore` M, `README.md` M, `MIGRATION_STATUS.md` M — nothing else |
+| No push/merge/deploy | none issued | **PASS** |
+
+### Checkpoint (per `MIGRATION_PLAN.md`)
+
+**"No obsolete code is loaded, and instructions match the repository."** — both halves verified: the built bundle is hash-identical to the pre-deletion one (nothing obsolete was ever loaded), and every README claim was checked against `package.json`, the Vite `engines` field, and the actual tree.
+
+### Manual / CI checks (PENDING — unchanged, happen when the user pushes to `v1`)
+
+Carried over from Steps 13/14/15: live deploy of `dist/`, share-card image, Search Console verification, domain-root fetches, and the CI run itself.
+
+### Blockers
+
+**None.**
+
+### Next task
+
+Step 17 — Review and commit (per `MIGRATION_PLAN.md`: review the diff of each coherent step, commit after review; before release, `git diff before-react-migration..HEAD --stat`).
+
+---
+
+# Overall Migration Status (end of step 16 session)
 
 | Step | Status |
 |------|--------|
@@ -761,4 +831,4 @@ Step 16 — Remove obsolete code and update documentation (per `MIGRATION_PLAN.m
 | 13 — Preserve static files, privacy, SEO | ✅ (this session; deploy/share-card checks PENDING until the `v1` push) |
 | 14 — Production verification | ✅ (this session; visual + deploy checks PENDING) |
 | 15 — Update GitHub Actions | ✅ (this session; CI run PENDING until the `v1` push) |
-| 16 — Delete legacy files & docs cleanup | ⏳ |
+| 16 — Delete legacy files & docs cleanup | ✅ (this session; no pending checks of its own — Step 13/14/15 deploy+visual checks still pending the `v1` push) |
