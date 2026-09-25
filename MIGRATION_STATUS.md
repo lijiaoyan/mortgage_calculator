@@ -329,7 +329,84 @@ Step 11 — Integrate the chart (replace the Chart.js CDN donut on the main tab 
 
 ---
 
-# Overall Migration Status (end of step 10 session)
+# Step 11 Detail
+
+## Step 11: Integrate the chart — ✅ COMPLETE (browser check PENDING)
+
+**Scope honored:** The main-tab donut moved from the Chart.js CDN global into a dedicated `PaymentChart.jsx` component backed by the **bundled** `chart.js` 4.5.1 + `react-chartjs-2` 5.3.1 packages. Categories, colors, legend, tooltip, and responsiveness are carried over from `script.js#updateChart`; required Chart.js components are explicitly registered; the numeric breakdown is passed through props; an all-zero breakdown renders nothing; the old CDN script and the legacy chart-instance code were removed **after** the React chart was in place and verified. The payment amounts remain readable text in the result cards (the canvas only visualizes). The Magic tab has no chart (unchanged). No backend, no routing, no TypeScript, no styling framework. No push, merge, or deploy. `src/lib/*`, `style.css`, `privacy.html`, `ExtraPaymentCalculator.jsx`, `App.jsx`, `main.jsx`, `navBridge.js`, and the original `script.js` were **not** modified.
+
+### Files created (this step)
+
+| File | Purpose |
+|------|---------|
+| `src/components/PaymentChart.jsx` | The payment donut. `memo`-wrapped function component: renders `null` before the first calculation or on an all-zero breakdown (no degenerate empty ring — `.chart-container`'s `min-height: 250px` preserves the layout, as the original blank canvas did); otherwise renders a `react-chartjs-2` `<Doughnut id="paymentChart">` with the four segment colors, the original legend/tooltip options, `cutout: '70%'`, `borderWidth: 0`, `hoverOffset: 4`, `responsive: true`, `maintainAspectRatio: false`. Registers `ArcElement`, `Tooltip`, `Legend` (the `DoughnutController` is registered by `react-chartjs-2`'s typed `<Doughnut>`). |
+| `src/components/PaymentChart.test.jsx` | 8 jsdom component tests (real `PaymentChart` + real `react-chartjs-2`, mocked `Chart` class) pinning the Step 11 checkpoint: one instance per canvas on `#paymentChart`, the exact original config, in-place `update()` on breakdown change (never a second instance), `memo()` no-op on unchanged re-render, no canvas/instance pre-calculation or on all-zero input, `destroy()` on unmount, hasCalc toggle destroys-before-recreates, and StrictMode leaves exactly **one live** instance. |
+
+### Files modified (this step)
+
+| File | Change |
+|------|--------|
+| `src/components/PaymentCalculator.jsx` | Removed the legacy CDN-chart code: `canvasRef`/`chartRef` refs, the `useEffect` that constructed `new window.Chart(...)` (and its destroy-before-redraw + unmount cleanup), and the destructured chart-key values. The `<canvas ref={canvasRef} id="paymentChart">` is replaced by `<PaymentChart hasCalc pi tax insurance hoa/>` inside the same `.chart-container` div, fed the raw (unformatted) breakdown from the derived `result`. Header comment updated. Nothing else in the component changed (Step 9 derived-on-render pattern intact). |
+| `index.html` | **Removed** the `<script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>` tag (only after the React chart was in place and its config verified against the original — see below). Font Awesome CDN, JSON-LD, `<head>` metadata, and everything else untouched. |
+| `package.json` / `package-lock.json` | Added `chart.js ^4.5.1` + `react-chartjs-2 ^5.3.1` (dependencies) and `jsdom ^30.1.1` (devDependency — component tests only, not bundled). |
+| `vite.config.js` | Vitest-only `test.server.deps.inline: ['chart.js', 'react-chartjs-2']` so `vi.mock('chart.js')` can intercept them (node_modules are externalized by default; real Chart.js cannot create a chart on jsdom's 2D-less canvas). Vite ignores the `test` key — dev/build output is unaffected (verified: identical `dist/index.html` structure, no config leakage). |
+| `MIGRATION_STATUS.md` | Step 11 marked COMPLETE (this update). |
+
+### Color parity — verified from source, not assumed
+
+The original `script.js#updateChart` dataset specified **no colors**; the CDN build's auto-registered `colors` plugin painted the arcs. Verified two facts empirically:
+
+1. **Same version on both sides.** `https://cdn.jsdelivr.net/npm/chart.js` (the exact URL `index.html` used) currently serves **chart.js 4.5.1** — confirmed live via the jsDelivr API (`tags.latest`) and the served file's banner — identical to the now-installed `chart.js@4.5.1`.
+2. **Per-arc palette.** Read the installed (identical) build's `colors` plugin source: `colorizeDoughnutDataset` sets `backgroundColor = data.map((_, k) => BORDER_COLORS[k % 7])` for a doughnut with no color definition, where `BORDER_COLORS` starts `rgb(54, 162, 235)`, `rgb(255, 99, 132)`, `rgb(255, 159, 64)`, `rgb(255, 205, 86)`. `PaymentChart.jsx` hardcodes exactly those four on the four-arc dataset, so the rendered arcs, legend point-style colors, and hover are pixel-identical to the CDN version.
+
+### Lifecycle — verified from the installed react-chartjs-2 5.3.1 source
+
+Read `node_modules/react-chartjs-2/dist/index.js`: `id`/`aria-label` reach the `<canvas>` via `...canvasProps`; the default `width={300} height={150}` HTML attributes equal the original bare `<canvas>` defaults; one `new Chart(canvas, config)` on mount; breakdown/option changes apply **in place** (`setDatasets`/`setOptions` on `chart.config` + `chart.update()`, dataset matched in place by `Object.assign`); `chart.destroy()` on unmount. `memo()` on `PaymentChart` means the wrapper only re-renders when the four breakdown numbers or `hasCalc` actually change — the original `updateChart()` cadence (redraw on real recalculation only; never on draft typing or tab switches).
+
+### Other documented behavior (deviations carried from Steps 9/10)
+
+- **Chart clears on validation error** (as the result cards already did since Step 9): a failed recalculation sets `hasCalc` false, so the donut unmounts and the (empty) `.chart-container` keeps its 250 px min-height. The original kept the stale chart on error. Deliberate cross-component consistency with the Step 9/10 error-reset deviation — flagged in the manual check below.
+- The canvas gains `role="img"` (added by react-chartjs-2) + our `aria-label` — an a11y improvement over the original bare canvas; no visual change.
+- The donut now ships in the JS bundle (`dist/assets/index-*.js` grows 245.79 kB → 403.97 kB, gzip 75.02 → 129.58 kB — the cost of dropping the separate CDN request, which is also one fewer third-party network request the privacy page can claim).
+
+### Verification (actual commands and results)
+
+| Check | Method | Result |
+|-------|--------|--------|
+| Full unit suite incl. new chart tests | `npm test` | **PASS** — 4 files, **145/145** (mortgage 46, amortization 22, extraPayment 69, PaymentChart 8) |
+| Step 11 checkpoint — no duplicate instances | `PaymentChart.test.jsx`: prop change → same instance, `update()` ×1, instance count stays 1; hasCalc toggle → old destroyed before new created; unmount → destroyed; StrictMode → exactly one **live** instance | **PASS** |
+| Step 11 checkpoint — clean data contract | `PaymentChart.test.jsx`: labels/order, raw numeric data, the four CDN-parity colors, `cutout '70%'`, legend (`bottom`, `#94a3b8`, point-style, padding 20, font 12), tooltip callback (`'P&I: $2,023'`, `'Taxes: $458'` via `formatCurrency`), `responsive`/`maintainAspectRatio: false`, `borderWidth 0`, `hoverOffset 4` | **PASS** |
+| All-zero / pre-calc breakdown | `PaymentChart.test.jsx`: no canvas, no instance, no error | **PASS** |
+| Color parity vs CDN | jsDelivr API (`tags.latest = 4.5.1`) + served-file banner vs installed `chart.js@4.5.1`; `colors` plugin source read (`colorizeDoughnutDataset` + `BORDER_COLORS`) | **PASS** — identical version, first-four palette entries match `SEGMENT_COLORS` exactly |
+| No legacy chart code left in `src/` | `grep -rn "window.Chart\|myDonutChart" src/` | **PASS** — 0 matches |
+| Production build | `npm run build` | **PASS** — 29 modules; `dist/index.html` 18.89 kB, `index-*.js` 403.97 kB (gzip 129.58), `index-*.css` 10.00 kB, `preview-*.png` 585.97 kB; no warnings |
+| CDN chart.js gone from built HTML | `grep -c "cdn.jsdelivr.net/npm/chart.js" dist/index.html` | **PASS** — 0 (only the Font Awesome CDN remains — Step 13 scope) |
+| No duplicate HTML IDs in built page | `grep -oE 'id="[^"]+"' dist/index.html \| sort \| uniq -c` | **PASS** — single occurrence per ID |
+| `script.js` not loaded | `grep -oE '<script[^>]*>' dist/index.html` | **PASS** — only the two JSON-LD blocks + the module bundle |
+| Chart markers in bundle | `grep -cF` over `dist/assets/index-*.js` | **PASS** — `paymentChart`, all four `rgb(...)` segment colors, `doughnut`, `94a3b8`, `maintainAspectRatio`, `P&I`/`Taxes`/`Insurance`/`HOA` all present |
+| Payment amounts remain readable text | Read `PaymentCalculator.jsx` result cards (unchanged from Step 9): six formatted values render as DOM text outside the chart | **PASS** |
+| Built output served | `npm run preview -- --port 5197` + `curl` | **PASS** — page / bundle / css all **200** (server stopped after the check) |
+| No push/merge/deploy | none issued | **PASS** |
+
+### Manual browser check (PENDING — this agent has no browser access)
+
+1. Main tab: $400,000 / $80,000 / 6.5 / 30 / 5,500 / 1,200 / 0 → Calculate → donut renders with the **same four arc colors as before the migration** (blue P&I, red Taxes, orange Insurance, yellow HOA), bottom legend, and hover tooltip reading e.g. "P&I: $2,023". No console errors; exactly one canvas in `.chart-container`.
+2. Change a field and Calculate again (e.g. rate 7.0) → the donut **updates in place** (same canvas element, no flash of a second chart), arc sizes change, colors/legend identical.
+3. Clear the home-price field and Calculate → donut disappears, result cards reset to $0 sentinels, "Please enter a valid home price." shows; `.chart-container` keeps its height (confirm the empty-on-error state is acceptable — see deviation above).
+4. Switch to Extra Payment Magic and back → donut intact (state preserved; canvas not recreated).
+5. DevTools → Network: **no request to cdn.jsdelivr.net for chart.js** on the built page; the donut still renders from the bundle.
+
+### Blockers
+
+**None.** Step 12 (animations/demo) is independent of this step.
+
+### Next task
+
+Step 12 — Reintroduce animations and the demo (typewriter intro on the main tab, magic-tab demo on empty switch, `sessionStorage` keys, `prefers-reduced-motion`, StrictMode-safe timers).
+
+---
+
+# Overall Migration Status (end of step 11 session)
 
 | Step | Status |
 |------|--------|
@@ -342,5 +419,6 @@ Step 11 — Integrate the chart (replace the Chart.js CDN donut on the main tab 
 | 7 — Extract & test calculation modules | ✅ |
 | 8 — React-ify the calculator area | ✅ |
 | 9 — Interactive parity (main calculator) | ✅ |
-| 10 — Extra Payment Magic parity | ✅ (this session; browser checks PENDING) |
-| 11–16 | ⏳ |
+| 10 — Extra Payment Magic parity | ✅ (browser checks PENDING) |
+| 11 — Integrate the chart | ✅ (this session; browser check PENDING) |
+| 12–16 | ⏳ |

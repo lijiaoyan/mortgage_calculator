@@ -39,23 +39,22 @@
 //      explicit "0"/"0.0" passes and a blank or non-numeric rate is
 //      rejected — exactly matching the F1-approved behavior.
 //
-// Chart: the donut is still drawn into the existing <canvas
-// id="paymentChart"> via the Chart.js CDN global (Step 11 swaps this for
-// react-chartjs-2). The effect keys off the four breakdown values it
-// paints (destructured from the derived `result`) plus `hasCalc` — all of
-// which only change when a recalculation actually occurs (inside
-// `commitCalculation` / `selectMode`, matching the original
-// updateChart() cadence) — never on unrelated re-renders like draft
-// typing or tab switches. The previous-chart-destroy + on-unmount cleanup
-// is preserved (AGENTS.md: "Clean up timers and chart resources").
+// Chart: the donut is rendered by PaymentChart.jsx (Step 11) from the
+// bundled chart.js + react-chartjs-2 packages. It receives the raw
+// breakdown numbers as props and updates in place (no duplicate canvas
+// instances; the instance is destroyed on unmount). It is memoized on
+// its primitive props, so it only re-renders when a recalculation
+// actually changes the breakdown — the same cadence as the original
+// updateChart().
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   parseNumeric,
   parseInterestRate,
 } from '../lib/validation.js';
 import { calculateMortgage } from '../lib/mortgage.js';
 import { formatCurrency } from '../lib/formatting.js';
+import PaymentChart from './PaymentChart.jsx';
 
 const BLANK_RESULT = {
   paymentAmount: '$0',
@@ -170,16 +169,9 @@ export default function PaymentCalculator({
   // toggle click, or `null` before the first one. Never holds formatted
   // or derived values.
   const [submitted, setSubmitted] = useState(null);
-  const canvasRef = useRef(null);
-  const chartRef = useRef(null);
 
   // Derived on every render — never stored (Step 9 requirement).
   const result = deriveResult(submitted);
-  // Deconstructed here so the chart effect can key on exactly the values
-  // it uses (a small, equality-comparable tuple) rather than on `submitted`
-  // or the whole derived object, and without needing an
-  // `eslint-disable-next-line react-hooks/exhaustive-deps`.
-  const { hasCalc, pi: chartPI, tax: chartTax, insurance: chartIns, hoa: chartHoa } = result;
 
   // Commit the current draft fields as the new "submitted" snapshot. This
   // is the only place `submitted` is ever written, so its object identity
@@ -223,82 +215,6 @@ export default function PaymentCalculator({
     // converted down-payment and the new mode.
     commitCalculation({ downPayment: nextValue }, mode);
   }
-
-  // Draw (or redraw) the donut whenever a successful calculation has
-  // occurred. It depends on exactly the values it paints (destructured
-  // above), so it fires only when a recalculation actually changes one of
-  // them — never on unrelated re-renders like typing in a draft field or
-  // switching tabs. The cleanup runs both on every re-draw AND on unmount,
-  // guaranteeing only one live Chart.js instance per canvas at a time.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!hasCalc) {
-      // No successful calculation yet — keep the canvas clean and tear down
-      // any existing instance (StrictMode safety: the effect runs twice on
-      // mount in dev, so this path must be idempotent).
-      if (chartRef.current) {
-        chartRef.current.destroy();
-        chartRef.current = null;
-      }
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
-      return undefined;
-    }
-    if (typeof window === 'undefined' || !canvas || !window.Chart) {
-      // Chart.js (CDN) not loaded or no canvas — nothing to draw. Step 11
-      // replaces this code path with react-chartjs-2.
-      return undefined;
-    }
-    if (chartRef.current) {
-      chartRef.current.destroy();
-      chartRef.current = null;
-    }
-
-    const ctx = canvas.getContext('2d');
-    chartRef.current = new window.Chart(ctx, {
-      type: 'doughnut',
-      data: {
-        labels: ['P&I', 'Taxes', 'Insurance', 'HOA'],
-        datasets: [{
-          data: [chartPI, chartTax, chartIns, chartHoa],
-          borderWidth: 0,
-          hoverOffset: 4,
-        }],
-      },
-      options: {
-        cutout: '70%',
-        plugins: {
-          legend: {
-            display: true,
-            position: 'bottom',
-            labels: {
-              color: '#94a3b8',
-              usePointStyle: true,
-              padding: 20,
-              font: { size: 12 },
-            },
-          },
-          tooltip: {
-            callbacks: {
-              label: (context) =>
-                context.label + ': ' + formatCurrency(context.raw),
-            },
-          },
-        },
-        responsive: true,
-        maintainAspectRatio: false,
-      },
-    });
-
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy();
-        chartRef.current = null;
-      }
-    };
-  }, [hasCalc, chartPI, chartTax, chartIns, chartHoa]);
 
   return (
     <>
@@ -489,7 +405,13 @@ export default function PaymentCalculator({
         </div>
 
         <div className="chart-container">
-          <canvas ref={canvasRef} id="paymentChart"></canvas>
+          <PaymentChart
+            hasCalc={result.hasCalc}
+            pi={result.pi}
+            tax={result.tax}
+            insurance={result.insurance}
+            hoa={result.hoa}
+          />
         </div>
       </aside>
     </>
