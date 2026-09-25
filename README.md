@@ -60,15 +60,18 @@
 
 ```
 .
-├── index.html                  # Main application page (calculator + magic + SEO content)
-├── script.js                   # All front-end logic (calculations, UI, demos)
-├── style.css                   # Design system, components, responsive rules
-├── privacy.html                # Privacy Policy page
-├── preview.png                 # Social / Open Graph preview image
-├── CNAME                       # Custom domain → mortgagepayofflab.com
-├── robots.txt                  # Crawler rules
-├── sitemap.xml                 # Sitemap for search engines
-├── googleb4f539193a03794c.html # Google Search Console verification
+├── index.html                  # Vite entry: app shell + SEO content (calculator, magic, guides)
+├── src/                        # React app (components, pure calc libs, tests)
+├── style.css                   # Design system, components, responsive rules (bundled by Vite)
+├── script.js                   # Legacy reference implementation (kept for Step 14 parity checks)
+├── vite.config.js              # Vite build + Vitest configuration
+├── public/                     # Static files copied verbatim into the production build
+│   ├── privacy.html            # Privacy Policy page (self-contained styles)
+│   ├── preview.png             # Social / Open Graph preview image
+│   ├── CNAME                   # Custom domain → mortgagepayofflab.com
+│   ├── robots.txt              # Crawler rules
+│   ├── sitemap.xml             # Sitemap for search engines
+│   └── googleb4f539193a03794c.html # Google Search Console verification
 ├── README.md
 └── .github/
     └── workflows/
@@ -137,8 +140,8 @@ Then visit <http://localhost:8000> (or the port your server picked).
 The repo is set up for **GitHub Pages** on a custom domain.
 
 1. Push changes to the `v1` branch — the workflow in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) runs automatically.
-2. The custom domain (`mortgagepayofflab.com`) is configured via [`CNAME`](CNAME).
-3. The workflow uploads the entire repo as the Pages artifact and deploys it.
+2. The custom domain (`mortgagepayofflab.com`) is configured via [`CNAME`](public/CNAME).
+3. The workflow installs dependencies, runs `npm run build`, and uploads the `dist/` folder as the Pages artifact. Static files from `public/` (CNAME, robots.txt, sitemap.xml, verification file, preview image, privacy page) are copied into `dist/` by Vite.
 
 You can also trigger a deployment manually from the GitHub **Actions** tab (`workflow_dispatch`).
 
@@ -182,4 +185,4 @@ Contributions are welcome! To keep the project lightweight:
 
 ## 📜 License
 
-© 2025 Mortgage Payoff Lab. See the [Privacy Policy](privacy.html) for how the site handles (i.e. doesn't handle) your data.
+© 2025 Mortgage Payoff Lab. See the [Privacy Policy](public/privacy.html) for how the site handles (i.e. doesn't handle) your data.

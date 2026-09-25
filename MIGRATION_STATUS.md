@@ -498,7 +498,251 @@ Step 13 — Preserve static files, privacy, and SEO (audit production output, ke
 
 ---
 
-# Overall Migration Status (end of step 12 session)
+# Step 13 Detail
+
+## Step 13: Preserve static files, privacy, and SEO — ✅ COMPLETE (deploy + share-card checks PENDING)
+
+**Scope honored:** Every existing public URL is preserved — the app at `/`, `/privacy.html` (self-contained styles, no new dependency on `style.css`), `/robots.txt`, `/sitemap.xml`, `/CNAME`, `/preview.png`, and the Google verification file — all now land in `dist/` via a new `public/` directory. The root `index.html` remains the Vite entry point; there is **no** `index.html` in `public/` and **no** router was introduced. Deployment domain unchanged: `CNAME` content, canonical URL, `og:url`/`twitter:url`, and both sitemap URLs are byte-identical to the pre-migration values. `src/lib/*` and every component are untouched — mortgage calculation behavior is unchanged (162/162 tests). **No push, merge, or deploy from this agent.**
+
+### Problems found in the pre-step production output (all fixed)
+
+1. **Deploy workflow had no build step** and uploaded the **entire repo root** (`path: '.'`). Pre-migration that was correct (the site *was* the repo root); post-migration it would serve the raw `index.html` with its `/src/main.jsx` reference — a broken site. Fixed: `setup-node` (Node 22, npm cache) → `npm ci` → `npm run build` → upload `path: 'dist'`. Trigger, permissions, concurrency, and environment unchanged.
+2. **No `public/` directory existed**, so the production build was missing *every* static URL (CNAME, robots.txt, sitemap.xml, verification file, preview.png, privacy.html). Fixed by `git mv` of the six files into `public/` (byte-identical moves — verified by md5, and the md5s again identical after Vite copies them into `dist/`).
+3. **`og:image`/`twitter:image` inconsistency in the old build:** with `preview.png` at the repo root, Vite rewrote `og:image` to a hashed `/assets/preview-*.png` but left `twitter:image` as `preview.png` — on a deployed site `/preview.png` would have 404'd. With the image now in `public/`, Vite rewrites **neither** tag: both keep the original relative `preview.png`, which resolves to `/preview.png` — the single stable public URL the original site had (verified: 200, 585,977 bytes).
+4. **`privacy.html` said "Mortgage Pro"** (the app is Mortgage Payoff Lab) in its title, §1, and footer — fixed.
+5. **Overclaimed privacy wording** in two places, inaccurate while the Font Awesome (cdnjs) and Google Fonts requests are still live: the JSON-LD FAQ answer ("no data is ever transmitted to a server or stored permanently") and `featureList` ("No data storage or transmission"). Both rewritten to scope the claim to **financial data / calculator inputs** and to note the CDN font/icon requests. `privacy.html` §1 rewritten the same way (inputs listed, "processed locally in your browser") plus a new paragraph naming the two CDNs; "Last updated" moved to September 25, 2026. No "no data leaves the browser" claim remains anywhere.
+6. **Stale copy** in `#tips`: "(coming soon in Mortgage Payoff Lab)" — the Extra Payment Magic tab is shipped (Step 10). Now reads "…shorten payoff time—see the Extra Payment Magic tab."
+7. **`privacy.html` back-link icon** used `<i class="fas fa-arrow-left">` without loading Font Awesome (the icon never rendered, pre-existing). Replaced with a Unicode `←` span so it renders without adding a CDN dependency to the page.
+
+### Files modified (this step)
+
+| File | Change |
+|------|--------|
+| `public/CNAME`, `public/robots.txt`, `public/sitemap.xml`, `public/googleb4f539193a03794c.html`, `public/preview.png` | `git mv` from repo root — contents unchanged (md5-verified in `dist/`). |
+| `public/privacy.html` | Brand "Mortgage Pro" → "Mortgage Payoff Lab" (title, §1, footer); §1 rewritten: inputs enumerated, "processed locally in your browser", "do not store or transmit any of the financial data you enter"; new CDN paragraph (Google Fonts + cdnjs, standard public-resource requests, never calculator inputs); §2 scoped to "financial data"; back-link icon → Unicode arrow; "Last updated: September 25, 2026". Still self-contained (inline `<style>` + its own Google Fonts `@import`; no `style.css` reference; back link `href="index.html"`). |
+| `index.html` | JSON-LD `featureList`: "Privacy-first: no financial data is stored or transmitted"; FAQ Q2 answer: inputs + calculations "processed locally in your browser", no financial data transmitted/stored, CDN parenthetical. `#tips` stale "coming soon" → Extra Payment Magic tab reference. **All other `<head>` metadata untouched** (title, description, canonical, OG, Twitter, both JSON-LD `@type`s, Font Awesome CDN) — head is byte-identical to the pre-migration original except the two wording fixes. |
+| `.github/workflows/deploy.yml` | Added `actions/setup-node@v4` (Node 22, `cache: npm`), `npm ci`, `npm run build`; upload artifact `path: '.'` → `path: 'dist'`. |
+| `README.md` | Project-structure tree now reflects the React layout (`src/`, `public/`, `vite.config.js`, `script.js` as legacy reference); deployment section: build + `dist/` upload instead of "uploads the entire repo"; `CNAME` and Privacy-Policy links repointed to `public/`. |
+| `MIGRATION_STATUS.md` | Step 13 marked COMPLETE (this update). |
+
+### What was verified against the pre-migration original (before changing anything)
+
+- `git show 02af58e:index.html` head compared to the current `index.html`: title, meta description, author, canonical, all OG and Twitter tags, and both JSON-LD blocks were already **identical** (Step 8 carried them over) — Step 13 therefore only fixed the wording overclaims and the stale tip, preserving every other tag.
+- Pre-migration original also contained the "coming soon" copy (line 529) — the copy fix is a correction of stale content, not a redesign.
+- PITI / HOA terminology checked across `index.html` (meta, JSON-LD, guides, FAQ, Trust & Transparency), `privacy.html`, and `src/`: PITI = Principal, Interest, Taxes, Insurance and HOA = monthly association fees, consistent everywhere.
+
+### Verification (actual commands and results)
+
+| Check | Method | Result |
+|-------|--------|--------|
+| Full unit suite | `npm test` | **PASS** — 6 files, **162/162** (no `src/` change this step; confirms no regression) |
+| Production build | `npm run build` | **PASS** — 29 modules; `dist/index.html` 19.01 kB (gzip 5.12), `index-*.js` 406.24 kB (gzip 130.41), `index-*.css` 10.00 kB (gzip 2.69); no warnings |
+| All static files in `dist/` | `find dist -type f` | **PASS** — exactly: `index.html`, `assets/index-*.js`, `assets/index-*.css`, `CNAME`, `robots.txt`, `sitemap.xml`, `googleb4f539193a03794c.html`, `preview.png`, `privacy.html` (9 files) |
+| Static files byte-identical to source | md5 of `public/*` vs `dist/*` | **PASS** — all six identical |
+| No second `index.html` | `find dist -name index.html` | **PASS** — only `dist/index.html` |
+| All public URLs serve | `npm run preview -- --port 4173` + `curl` | **PASS** — 200 on `/`, `/privacy.html`, `/robots.txt`, `/sitemap.xml`, `/CNAME`, `/preview.png`, `/googleb4f539193a03794c.html`, `/assets/index-*.js`, `/assets/index-*.css` (server stopped after) |
+| `preview.png` intact | `curl` + `stat -c%s` | **PASS** — 585,977 bytes end-to-end |
+| `CNAME` content | `cat dist/CNAME` | **PASS** — `mortgagepayofflab.com` |
+| `robots.txt` / sitemap URLs | `cat` | **PASS** — `Sitemap: https://mortgagepayofflab.com/sitemap.xml`; sitemap lists `/` and `/privacy.html` (unchanged) |
+| `/privacy.html` styled | jsdom render of `dist/privacy.html` + computed styles | **PASS** — h1 in `Outfit`, card `border-radius: 24px` + shadow, body gradient, back-link `#4f46e5`-var, `href="index.html"`; inline `<style>` present, no external stylesheet |
+| Privacy wording | `grep` over `dist/privacy.html` | **PASS** — "Mortgage Payoff Lab" ×3, "Mortgage Pro" ×0, "processed locally in your browser", CDN paragraph present |
+| Metadata preserved in built HTML | `grep` over `dist/index.html` | **PASS** — title, meta description, `canonical https://mortgagepayofflab.com/`, all 5 OG tags, all 5 Twitter tags, `og:image` + `twitter:image` both `preview.png` (resolves to `/preview.png`, 200) |
+| JSON-LD valid | `JSON.parse` of both extracted blocks | **PASS** — 2 blocks: `SoftwareApplication`, `FAQPage` (3 questions) |
+| Educational/SEO content in built HTML | `grep` over `dist/index.html` | **PASS** — `#extra-magic-guide`, `#guide`, `#tips`, FAQ section, Trust & Transparency all present |
+| No duplicate HTML IDs | regex id scan of `dist/index.html` | **PASS** — 7 IDs, no duplicates |
+| No Chart.js CDN (Step 11 regression guard) | `grep -c "cdn.jsdelivr.net/npm/chart.js" dist/index.html` | **PASS** — 0 (only the Font Awesome CDN remains — now disclosed in the privacy wording) |
+| Built HTML references only hashed assets | `grep` over `dist/index.html` | **PASS** — `/assets/index-*.js` + `/assets/index-*.css`; no `/src/main.jsx`, no bare `style.css` reference |
+| Deploy workflow shape | Read `deploy.yml` | **PASS** — trigger `v1` + `workflow_dispatch`, permissions/concurrency/environment unchanged; new steps: setup-node 22 (npm cache), `npm ci`, `npm run build`, upload `dist` |
+| No push/merge/deploy | none issued | **PASS** |
+
+### Manual / CI checks (PENDING — deploy happens on the user's push to `v1`)
+
+1. After the first CI deploy: `https://mortgagepayofflab.com/` serves the built app; `/privacy.html` opens directly with its dark styling and a working back link; `/CNAME` is honored (custom domain unchanged).
+2. Share-card test (e.g. Facebook Sharing Debugger / X Card Validator): the preview image loads from `https://mortgagepayofflab.com/preview.png` for both `og:image` and `twitter:image`.
+3. Google Search Console verification file at `/googleb4f539193a03794c.html` (site ownership re-check if it had lapsed).
+4. `/robots.txt` and `/sitemap.xml` fetch at the domain root.
+
+### Blockers
+
+**None.** The deploy-workflow change only takes effect when the user pushes to `v1` (this agent does not push/merge/deploy per AGENTS.md).
+
+### Next task
+
+Step 14 — Final verification: interactive parity re-check against the original (`script.js` still in the repo as the reference) plus the production-file checklist above.
+
+---
+
+# Step 14 Detail
+
+## Step 14: Verify the production build — ✅ COMPLETE (visual + deploy checks PENDING)
+
+**Scope honored:** verification only — **no application code changed** (no features, no refactors, no regression fixes needed). Verification ran against the **working tree**, which holds the Step 13 changes (note: those Step 13 changes were still **uncommitted** in the working tree at the start of this step — `git status` showed the staged `public/` renames and modified `index.html`/`README.md`/`deploy.yml`/`privacy.html`/`MIGRATION_STATUS.md`; latest commit was "Step 12 is complete now").
+
+### Method (this environment has no usable browser)
+
+`/apps/bin/firefox` (ESR 128) cannot run inside this container (missing X11/NSS/GTK libraries — `ldd` verified), and no other browser is available. Production verification was therefore done at three levels, each running the **actual production bundle**:
+
+1. **`npm run preview` serves `dist/`** — all static URLs checked with `curl` + md5.
+2. **The built bundle executed in jsdom 30** (`JSDOM.fromURL` against the live preview server; jsdom does not execute `<script type="module">`, so the single self-contained classic chunk — verified to contain zero ESM syntax — was evaluated in the window realm, equivalent to the browser executing the module after DOM parse). 92 checks across three sessions: RUN A (full interactive parity), RUN B (fresh-session demo), RUN C (prefers-reduced-motion). jsdom gaps were bridged **in the harness only** (canvas 2D no-op stub, `ResizeObserver` stub, layout sizes, no-op `scrollTo`/`scrollIntoView`) — nothing was added to application code.
+3. **Reference implementation:** the repo's pre-React `script.js` (the deployed original's code, with the approved F1/F4 decisions from Steps 7–10) was executed in Node under a minimal DOM shim that fires its real `calculate()` / `calculateMagic()` / demo / sync code paths, producing the exact display strings the original renders for every case. The React production output was asserted **equal** to those values.
+
+### Verification (actual commands and results)
+
+| Check | Method | Result |
+|-------|--------|--------|
+| Full unit suite | `npm test` | **PASS** — 6 files, **162/162** |
+| Clean production build | `rm -rf dist && npm run build` | **PASS** — 29 modules, no warnings; `dist/index.html` 19.01 kB (gzip 5.12), `assets/index-BrptsVus.js` 406.24 kB (gzip 130.41), `assets/index-W1v8K94i.css` 10.00 kB (gzip 2.69) |
+| `dist/` contents | `find dist -type f` + md5 | **PASS** — exactly 9 files; all six `public/` files byte-identical in `dist/`, and byte-identical to the pre-migration originals at commit `02af58e` (except `privacy.html` — deliberate Step 13 wording/branding fix) |
+| Preview static URLs | `npm run preview -- --port 4173 --strictPort` + `curl` | **PASS** — 200 on `/`, `/privacy.html`, `/robots.txt`, `/sitemap.xml`, `/CNAME`, `/preview.png` (585,977 B), `/googleb4f539193a03794c.html`, `/assets/index-BrptsVus.js`, `/assets/index-W1v8K94i.css` (server stopped after) |
+| `CNAME` | `cat dist/CNAME` | **PASS** — `mortgagepayofflab.com` |
+| Interactive parity | 92-check jsdom run of the production bundle vs the executed `script.js` reference | **PASS — 92/92** (RUN A 58, RUN B 14, RUN C 6, plus network/console audits) |
+
+### Parity results (React production bundle == executed original, exact display strings)
+
+| Case | Displayed values (both implementations) |
+|------|------------------------------------------|
+| A1 standard ($400k / $80k / 6.5% / 30y / tax 5,500 / ins 1,200 / HOA 0) | P&I **$2,023** · Principal **$320,000** · Interest **$408,142** · Taxes&Fees **$558** · PITI **$2,581** · Payoff **$929,142** |
+| A2 zero interest (0%) | P&I **$889** · Interest **$0** · PITI **$1,447** · Payoff **$521,000** (F1-approved: 0% is valid) |
+| A11 zero-interest + $0 down | P&I **$1,111** · Interest **$0** |
+| A3 full down payment | exact error "Down payment must be less than the home price." |
+| A8 blank price | exact error "Please enter a valid home price." |
+| A9a negative rate | exact error "Please enter a valid interest rate and term." |
+| A9c/A9d 110% down → toggle back | error; toggle converts to **440,000**, still error |
+| A9b 90% down | P&I **$253** · Principal **$40,000** · PITI **$811**; %→$ converts to **360,000** (valid) |
+| A10 PITI with HOA 250 | Taxes&Fees **$808** · PITI **$2,831** |
+| A12 rate 7.0 | P&I **$2,129** · PITI **$2,687** (also: results change **only** on button click — typing 7.0 without clicking left the display at $2,581) |
+| Down-payment toggle round-trip | $80,000 → % → **"20.0"** → $ → **"80,000"**, A1 results unchanged each time (toggle re-runs the calculation, as in the original) |
+| B7 extra $0 | 30y 0m / 30y 0m · **$0** saved · **0 months** · interest **$407,857** both (simulations match) |
+| B4 $200/month | **$105,287** saved · 6y 7m · **23y 5m** · **$302,570** |
+| B4b toggle to one-time (same $200) | **$1,191** saved · 0 months · **$408,142** (unrounded P&I re-derived on mode change, as in the original) |
+| B5 one-time $10,000 (natural sequence) | **$53,879** saved · 2y 7m · **27y 5m** · **$353,978** |
+| B6 balance $200,000 + $200/mo | **$12,221** saved · 1y 6m · 11y 10m → **10y 4m** · **$87,162 → $74,940** |
+| B-overpay one-time $10,000 on $1,000 balance | paid off **0y 1m**, interest **$5**, **$0** saved, no success claim — final payment never overpays principal |
+| F7 non-amortizing (PI $1,000 < $1,733 interest) | numbers identical to original (50y 0m, **$3,925,742**) + approved explicit warning + suppressed success message |
+| F7 600-month limit (PI $810 @ 3%) | numbers identical (**$472,107**) + approved "50y 0m**+**" truncation suffix + explicit 600-month warning |
+| C10a tab sync | all 7 fields copied one-way on switch (balance **320,000** = price − down), P&I auto-filled **2,023**, results computed (**$408,142** unrounded, as in the original's `calculateMagic()` on switch) |
+| C10b no reverse sync | editing Magic left Main untouched |
+| Magic validation | empty form → exact "Please enter valid mortgage details." + cards reset to sentinels ("30 Years", "Enter your details to see the magic happen!") |
+| Demo (fresh session) | types 600,000 / 450,000 / 120,000 / 6.5 / 30 / 500 at the original 40 ms/char cadence; P&I auto-filled **3,034**; **$147,945** saved · 7y 1m · 25y 2m → **18y 1m** · **$463,572 → $315,627**; session key `mpl_magic_demo_v4` **not set mid-typing, set on completion**; glow `scale(1.02)` → `scale(1)` with `all 0.5s ease`; keeps running in the background while on the Calculator tab; no second run after completion; **values remain in the fields** (F6 resolution); user typing stops the demo (user value kept, key not set) |
+| Typewriter | types "Enter your home price here..." with `\|` cursor in the placeholder (value never touched); holds full text once the field has a value or focus |
+| Reduced motion | static full placeholder text (no timers); demo fills all values at once, key set immediately, no glow |
+
+**Baseline-file note (B cases):** the "Original Interest" figures in `BASELINE_CASES.md` §B (e.g. $408,142 for B4/B5) came from the Step 4 *independent Node re-implementation*, which used the unrounded contractual P&I. The original code **as executed** uses the rounded P&I (2,023) that its own auto-fill writes into the field after non-core-field edits, so it displays **$407,857** in the natural user flow — and the React production build matches the executed original **exactly** ($407,857). Both implementations agree; the baseline file's reference column predates executed-original verification and is the outlier. (A2's baseline row — "0% rejected" — was superseded by the approved F1 decision, which both the repo's `script.js` and the React app encode.)
+
+### Console / network audit (production bundle, all three jsdom sessions)
+
+- **Zero** console errors or warnings (production React strips dev-mode warnings; nothing was emitted at all).
+- **Zero** failed resource loads.
+- **Zero** app-level network calls during every interaction (fetch/XHR/WebSocket/sendBeacon were instrumented in the harness; bundle grep: no XHR/WebSocket/beacon — the sole `fetch(` in the bundle is Vite's standard modulepreload polyfill, and no such links exist in the single-chunk build). **Mortgage inputs are never transmitted.**
+- Only external requests: **Font Awesome** (cdnjs `<link>`) + **Google Fonts** (css2 `@import` in the stylesheet) — the same two CDNs the pre-migration page requested, both disclosed in the Step 13 privacy wording. **No Chart.js CDN.**
+
+### Chart (verified at the DOM level; pixels unverified)
+
+- Exactly **one** canvas (`#paymentChart`, aria-labelled) after a successful calculation; canvas **removed** on validation failure; **re-created** on the next successful calculation; no duplicate instances, no console errors from Chart.js (canvas 2D was a no-op stub in jsdom).
+- Segment colors are set explicitly to the original CDN-palette values (`rgb(54,162,235)` / `rgb(255,99,132)` / `rgb(255,159,64)` / `rgb(255,205,86)`) — the Step 11 parity mechanism; pixel-level rendering itself needs a real browser (see below).
+
+### Keyboard / a11y (verified at the DOM level)
+
+- All **17** form controls carry both a `label[for]` and an `aria-label`; error regions use `role="alert"`; the PITI figure is `aria-live="polite"`.
+- All controls focusable; **Get Started** focuses the price field and (per the bridge) switches to the Calculator tab.
+- Tab order in the built page (37 focusable elements) is logical: header nav → Get Started → main inputs (price → down-payment $/% toggle → down → rate → term → tax → insurance → HOA) → Calculate My Payment → magic fields → Calculate Savings → footer links.
+
+### Responsive layout (partial)
+
+- The built CSS contains the original's three media-query breakpoints (`@media (width<=480px)`, `(width<=768px)`, `(width<=900px)`).
+- Visual overflow / chart-resize behavior needs a real browser layout engine — **PENDING** below.
+
+### Minor observations (NOT regressions — nothing fixed)
+
+1. **Legacy button ids absent:** the migrated Calculate buttons have no `id="calcBtn"` / `id="magicCalcBtn"`. Verified nothing references those ids anywhere in the built output (grep over CSS, built HTML, and bundle: 0 hits), so there is no functional impact.
+2. **Redundant same-mode toggle click:** the original unconditionally re-ran `calculateMagic(false)` on a click of the *already-active* Monthly/One-time button (re-deriving the unrounded P&I — the $408,142 variant); the React app treats a same-mode click as a no-op (the $407,857 variant). The natural user flow — change mode, then enter an amount — matches the original **exactly**; only the redundant re-click differs, by a few display dollars.
+3. **Documented, approved deviations confirmed in production:** F1 (0% valid), F4 (term read from the text input; the dead select renamed `magicTermSelect` and never read), F6 (demo values remain after completion instead of the original's stale clear), F7 (explicit limit/non-amortizing warnings + `+` truncation suffix), validation-error reset to sentinel cards (original kept stale cards), reduced-motion static/instant behavior (Step 12 requirement), and the main-tab value demo (`runDemo`/`mpl_demo_seen`) intentionally **not** ported (dead code in the original).
+
+### Manual / visual checks (PENDING — no browser layout engine in this environment)
+
+1. Visual donut rendering: arc colors, bottom legend, hover tooltips (values/palette are unit-pinned; canvas was stubbed in jsdom).
+2. Mobile viewport (390–430 px): no horizontal overflow; chart resize behavior.
+3. Real-browser Tab-key traversal (DOM order verified above) and focus rings.
+4. Real-browser sessionStorage reload behavior (same-session no-re-run was verified in-process; a true page reload in this environment is a fresh jsdom instance).
+5. Everything from Step 13's PENDING list still applies (live deploy, share-card image, Search Console, domain-root fetches) — those require the `v1` push.
+
+### Files changed (this step)
+
+| File | Change |
+|------|--------|
+| `MIGRATION_STATUS.md` | Step 14 marked COMPLETE (this update) |
+
+Verification harnesses were temporary (`/tmp/verify-production.mjs`, `/tmp/ref-original.mjs`, `/tmp/dbg*.mjs`, `/tmp/taborder.mjs`) and were **not** added to the repository.
+
+### Blockers
+
+**None.** Step 15 (GitHub Actions) is next.
+
+### Next task
+
+Step 15 — Update GitHub Actions: build `dist/` in CI and deploy it (the workflow change from Step 13 is in place but untested until the first CI run on the `v1` push).
+
+---
+
+# Step 15 Detail
+
+## Step 15: Update GitHub Actions — ✅ COMPLETE (CI run PENDING until the `v1` push)
+
+**Scope honored:** `.github/workflows/deploy.yml` updated for the Vite production flow. The deployed artifact is `dist/`, not the source tree. The production-branch (`v1`) restriction is preserved and extended to manual runs. No push, no deployment trigger, no DNS/CNAME/custom-domain changes, no application-code changes.
+
+### What changed in `.github/workflows/deploy.yml`
+
+| Area | Before (working tree at start of Step 15) | After |
+|------|-------------------------------------------|-------|
+| Triggers | `push` on `v1` + **unrestricted** `workflow_dispatch` | `push` on `v1` + `workflow_dispatch` **restricted to `v1`** — a manual run from any other branch can no longer publish |
+| Steps | checkout → setup-node 22 → `npm ci` → `npm run build` → configure-pages → upload `path: 'dist'` → deploy | checkout → setup-node 22 → `npm ci` → **`npm test`** → `npm run build` → configure-pages → upload `path: 'dist'` → deploy |
+| Action versions | checkout@v4, setup-node@v4, configure-pages@v4, upload-pages-artifact@v3, deploy-pages@v4 — all **Node 20 runtime** | checkout@v7, setup-node@v7, configure-pages@v6, upload-pages-artifact@v5, deploy-pages@v5 — all **Node 24 runtime** |
+| Comments | "Runs on pushes targeting the default branch" (v1 is not the default branch); job comment "no build step needed" (stale, from the committed pre-Step-13 version) | "…targeting the production branch"; `workflow_dispatch` comment notes the branch restriction; job comment notes the Vite build (already present from Step 13) |
+
+The committed (HEAD) version of the workflow was still the pre-Step-13 no-build version (`path: '.'`); the Step 13 build steps were already in the working tree and are preserved unchanged.
+
+**Why the action versions had to change:** GitHub retired the Node 20 runtime for GitHub Actions on **2026-09-23** ("Node 20 is no longer available in GitHub Actions" — GitHub changelog, Retired). All five previously pinned majors declare `runs.using: node20` in their `action.yml`, so the workflow could no longer run at all. Each replacement was verified against its `action.yml`: current major, `node24` runtime, and identical input contract for everything the workflow uses (`path` on upload-pages-artifact; `node-version`/`cache` on setup-node; `token` on configure-pages/deploy-pages defaults to `github.token` in both). Node 22 is kept as the project Node version (LTS; satisfies Vite 8's `engines: ^20.19.0 || >=22.12.0`).
+
+**Preserved verbatim:** `permissions` (`contents: read`, `pages: write`, `id-token: write`), `concurrency` (`group: "pages"`, `cancel-in-progress: false`), `environment` (`github-pages` + `page_url`), `runs-on: ubuntu-latest`. There is no `pull_request` trigger, so pull requests are never deployed.
+
+### Verification (actual commands and results)
+
+| Check | Method | Result |
+|-------|--------|--------|
+| YAML syntax + structure | `npx -y yaml valid` + `yaml --json -1` parse of `deploy.yml` | **PASS** — parses cleanly; the parsed tree matches the intended triggers / permissions / concurrency / environment / step order |
+| Production branch restriction | Parsed `on.push.branches` and `on.workflow_dispatch.branches` | **PASS** — both `["v1"]`; the Actions-tab run button only appears on `v1`, and API dispatches from other branches are rejected |
+| Validation order | Parsed `jobs.deploy.steps` | **PASS** — sequential single job: checkout → setup-node → `npm ci` → `npm test` → `npm run build` → configure-pages → upload `dist` → deploy; any failing step stops the job before `deploy-pages` can run |
+| The exact CI sequence passes on this tree | `npm ci && npm test && npm run build` | **PASS** — `npm ci`: 0 vulnerabilities; `npm test`: 6 files, **162/162**; `npm run build`: 29 modules, no warnings (`dist/index.html` 19.01 kB, `index-BrptsVus.js` 406.24 kB, `index-W1v8K94i.css` 10.00 kB) |
+| Artifact contents | `find dist -type f` after the clean build | **PASS** — exactly 9 files: `index.html`, 2 hashed assets, `CNAME`, `robots.txt`, `sitemap.xml`, `googleb4f539193a03794c.html`, `preview.png`, `privacy.html`; no source tree, no `package.json`, single `index.html` |
+| Action versions currently supported | GitHub tags API + each action's `action.yml` | **PASS** — v7/v7/v6/v5/v5 are the current majors, all `node24`; every replaced major is `node20` (retired 2026-09-23); no input contract changes for the inputs this workflow sets |
+| No pull-request deployment | Parsed `on` | **PASS** — only `push` + `workflow_dispatch`, both `["v1"]` |
+| Permissions / environment / concurrency | Parsed document | **PASS** — identical to the pre-step values |
+| No push / no deployment trigger / no DNS, CNAME, custom-domain change | none issued; `git status` shows only `deploy.yml` + this file modified | **PASS** |
+
+### Files changed (this step)
+
+| File | Change |
+|------|--------|
+| `.github/workflows/deploy.yml` | Added `workflow_dispatch.branches: ["v1"]`; added the `npm test` step between `npm ci` and `npm run build`; bumped all five actions to the current Node 24 majors (required — Node 20 runtime retired 2026-09-23); corrected two stale comments (trigger comment, job comment). Step 13's build steps and the `dist` upload path preserved. |
+| `MIGRATION_STATUS.md` | Step 15 marked COMPLETE (this update) |
+
+### Manual / CI checks (PENDING — happen when the user pushes to `v1`)
+
+1. Push of the migration commits to `v1` → workflow runs: checkout → setup-node 22 → `npm ci` → `npm test` → `npm run build` → upload `dist` → deploy-pages.
+2. Actions tab: "Run workflow" is offered on `v1` only (not on `main`/`watson`); a manual run on `v1` deploys `dist/`.
+3. After deploy: `https://mortgagepayofflab.com/` serves the built app — Step 13/14's PENDING live checks carry over (privacy page, CNAME, share-card image, Search Console file, `/robots.txt` + `/sitemap.xml`).
+
+### Blockers
+
+**None.**
+
+### Next task
+
+Step 16 — Remove obsolete code and update documentation (per `MIGRATION_PLAN.md`: after feature parity is confirmed, remove the unused legacy `script.js` and unused CDN dependencies — search for references before deleting or moving files — and update `README.md`).
+
+---
+
+# Overall Migration Status (end of step 15 session)
 
 | Step | Status |
 |------|--------|
@@ -513,5 +757,8 @@ Step 13 — Preserve static files, privacy, and SEO (audit production output, ke
 | 9 — Interactive parity (main calculator) | ✅ |
 | 10 — Extra Payment Magic parity | ✅ (browser checks PENDING) |
 | 11 — Integrate the chart | ✅ (browser check PENDING) |
-| 12 — Reintroduce animations and the demo | ✅ (this session; browser checks PENDING) |
-| 13–16 | ⏳ |
+| 12 — Reintroduce animations and the demo | ✅ (browser checks PENDING) |
+| 13 — Preserve static files, privacy, SEO | ✅ (this session; deploy/share-card checks PENDING until the `v1` push) |
+| 14 — Production verification | ✅ (this session; visual + deploy checks PENDING) |
+| 15 — Update GitHub Actions | ✅ (this session; CI run PENDING until the `v1` push) |
+| 16 — Delete legacy files & docs cleanup | ⏳ |
