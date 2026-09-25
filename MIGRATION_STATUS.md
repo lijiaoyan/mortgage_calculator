@@ -406,7 +406,99 @@ Step 12 — Reintroduce animations and the demo (typewriter intro on the main ta
 
 ---
 
-# Overall Migration Status (end of step 11 session)
+# Step 12 Detail
+
+## Step 12: Reintroduce animations and the demo — ✅ COMPLETE (browser checks PENDING)
+
+**Scope honored:** The two animations that were **live in the original** are ported to React:
+
+1. **Main-tab placeholder typewriter** (`script.js#initTypewriter` — ran unconditionally on load): types "Enter your home price here..." into the price input's *placeholder* (never its value), holds, deletes, loops.
+2. **Magic-tab typing demo** (`script.js#runMagicDemo` — driven by the navExtra handler whenever the magic price was empty, gated by `sessionStorage` `mpl_magic_demo_v4`).
+
+The original's **dead** main-tab value demo (`runDemo` / `runDemoOnce`, gated by `mpl_demo_seen`) was **not** ported: its call site is commented out in the original, so the deployed site never ran it — porting it would add behavior the original never had (documented deviation).
+
+All Step 12 requirements were layered on:
+
+- **Every timer cleaned up on unmount** — each animation is a single `setTimeout` chain tracked in one ref; the cleanup cancels it on unmount and on every effect re-run (StrictMode's double-invoked mount cancels the first chain).
+- **Demo stops when the user begins interacting** — typing in any magic field, clicking Calculate Savings, or toggling Monthly/One-time cancels the pending chain (the demo's own state writes bypass the user handlers, so they can never trip the stop).
+- **User-entered values are never overwritten** — a demo field the user already filled is *skipped* (the original cleared all six and retyped them).
+- **`prefers-reduced-motion` respected** — typewriter: static full text, no timers; demo: all values appear at once, no glow, session key set immediately. The typewriter also follows the setting flipping at runtime (matchMedia `change` listener).
+- **Placeholders separate from actual values** — the typewriter only ever writes the `placeholder` attribute (via state); it never touches `value`.
+- **StrictMode-safe by construction** (StrictMode remains enabled in `main.jsx`; nothing was disabled to hide duplicate-effect bugs).
+
+### Files created (this step)
+
+| File | Purpose |
+|------|---------|
+| `src/components/PaymentCalculator.test.jsx` | 7 jsdom + fake-timer tests pinning the typewriter: the exact original timing table (100 ms/char typing with `\|` cursor, 3000 ms hold, 50 ms/char deletion — including the original's two-tick full-text deletion quirk — 500 ms pause, repeat), stop-on-value/focus with the **1 s re-check** and **resume-from-where-it-left-off** semantics, reduced-motion static text + runtime setting change, unmount timer cleanup (`getTimerCount() === 0`), StrictMode single chain. |
+| `src/components/ExtraPaymentCalculator.test.jsx` | 10 jsdom + fake-timer tests pinning the demo: the exact 2600 ms timeline (price `'600'` at t=120, completion at t=2600), P&I left empty until rate + term are both typed (the original validated before touching the P&I field), final values + P&I auto-filled from the ORIGINAL loan (computed from `src/lib/mortgage.js` in the test), session key set at completion, glow `scale(1.02)` → `scale(1)` at +500 ms, no same-session re-run, sync precedence over the demo, stop-on-typing, stop-on-Calculate-click, skip-user-filled-field (timeline +200 ms beat), reduced-motion instant fill with no glow, unmount mid-demo (no key, no timers), StrictMode single chain; plus an App-level test: demo keeps running while the user is on the Calculator tab, and re-entering Magic starts **no second demo**. |
+
+### Files modified (this step)
+
+| File | Change |
+|------|--------|
+| `src/components/PaymentCalculator.jsx` | Typewriter: `pricePlaceholder` state (initial `''` — the original static placeholder was empty; the animation is the sole placeholder source), `priceFocused` state via `onFocus`/`onBlur` on the price input, a stop-condition **ref read at each tick** (so value/focus changes never restart the chain — the original's chain kept running and resumed mid-word), a matchMedia listener effect for the reduced-motion setting, and the faithful timing-table effect with cleanup. The price input now uses `placeholder={pricePlaceholder}`. Header comment updated (including the `runDemo`/`mpl_demo_seen` non-port decision). Nothing else in the component changed. |
+| `src/components/ExtraPaymentCalculator.jsx` | Demo: `MAGIC_DEMO_KEY` (`mpl_magic_demo_v4` — the "v4" rename preserved verbatim) + `MAGIC_DEMO_FIELDS` (original values and order; `magicTerm` → `magicTermText` per F4); `demoActiveRef` / `demoTimerRef` / `demoGlow` state (0/1/2); `stopDemo()`; `startDemo(baseline)` — original cadence ((len+1) × 40 ms per field + 200 ms pause) and the original `calculateMagic()` P&I auto-fill on the same ticks (`applyPIAutoFill` no-ops while the form is invalid, exactly like the original's validation early-return); the `seedNonce` effect restructured to the original navExtra order (sync check **first**, then the demo check against the **post-sync** state); user handlers (`handleMagicInput` / `handleCalculate` / `selectExtraMode`) call `stopDemo()` first; unmount cleanup effect; the results-card glow as a state-driven inline `transition`/`transform` (same properties the original set inline — `style.css` untouched, per AGENTS.md "reuse the existing CSS"). Header comment updated. |
+| `MIGRATION_STATUS.md` | Step 12 marked COMPLETE (this update). |
+
+### Parity notes and decisions
+
+- **Session key timing preserved:** set when typing **finishes**, not at start — a reload mid-demo re-runs the demo on the next switch, exactly as in the original.
+- **P&I auto-fill during the demo** happens only once the form is valid (rate + term typed) — the original `calculateMagic()` early-returned on validation failure and left the P&I field untouched; `applyPIAutoFill` reproduces that gate (test-pinned).
+- **F6 resolved (stale results after the demo):** the original cleared the six fields ~2 s after the demo but never recalculated, leaving stale results. Stale results are impossible under the Step 10 derived-on-render pattern (AGENTS.md: "Do not store redundant calculated values in state"), so the demo values **remain in the fields** — the result the user saw stays visible and consistent with the fields. The 2000 ms field-clear timer was therefore not ported.
+- **No competing second demo:** a second nav click while a demo is running cannot start another chain (the original *would* have started a second, competing `runMagicDemo` — latent bug, deliberately not reproduced).
+- **Tab switch mid-demo:** both tabs stay mounted (`App.jsx` toggles `display`), so the demo keeps running in the background — the same as the original's page-level timer chain, which was not tied to tab visibility.
+- **Typewriter stop/resume:** while the price field holds a value or has focus, the placeholder holds the full text and the chain re-checks every 1 s; it resumes from the interrupted character (original behavior, test-pinned).
+- The original's `console.log("Starting Extra Payment Magic Demo...")` was not ported (debug noise, not user-visible behavior).
+- Under reduced motion the typewriter shows the static full text — the same text the stopped state shows (the original had no such mode; this is the Step 12 requirement).
+
+### Verification (actual commands and results)
+
+| Check | Method | Result |
+|-------|--------|--------|
+| Full unit suite incl. new animation tests | `npm test` | **PASS** — 6 files, **162/162** (mortgage 46, amortization 22, extraPayment 69, PaymentChart 8, PaymentCalculator/typewriter 7, ExtraPaymentCalculator/demo 10) |
+| Typewriter timing table | `PaymentCalculator.test.jsx` (fake timers): `\|` → `E\|` → … → full+`\|` at 2900 ms; hold to 5900 ms; deletion incl. the original's 2-tick full-text quirk; `''` at 7400 ms; restart `\|` at 7900 ms | **PASS** |
+| Stop/resume semantics | value present → full text held with 1 s re-checks; cleared → resumes mid-word (`Ente\|` after `Ent\|` was the interrupted state); same for focus/blur | **PASS** |
+| Reduced motion (typewriter) | static full text, `getTimerCount() === 0`; setting flipped at runtime → static ↔ animated both ways | **PASS** |
+| Unmount cleanup (both animations) | `getTimerCount() === 0` after unmount; advancing 60 s fires nothing | **PASS** |
+| Demo timeline | `'600'` at t=120; P&I still empty at t=840 (form invalid); all six final values + P&I from the original 480,000 loan + key `'1'` + glow `scale(1.02)` at t=2600; `scale(1)` and 0 timers at t=3100; result card text matches `deriveExtraPaymentResult` of the demo's final inputs | **PASS** |
+| Session behavior | key set → cleared form + fresh nav click → no re-run, 0 timers | **PASS** |
+| Sync precedence | main price 400,000 → fields synced (balance `320,000`, P&I `2,023`), no demo, key never set | **PASS** |
+| Stop on user interaction | typing a rate mid-demo and clicking Calculate Savings each cancel the chain; user value kept; no key | **PASS** |
+| User values never overwritten | pre-filled balance `250,000` survives the demo (skipped field, +200 ms beat); same under reduced motion | **PASS** |
+| Reduced motion (demo) | all values + P&I synchronously, key set, no glow, 0 timers | **PASS** |
+| StrictMode | one live typewriter chain and one live demo chain per trigger | **PASS** |
+| Tab switch mid-demo (through `CalculatorApp`) | demo keeps typing while on the Calculator tab (`12` in the down field at t=1120); re-entry starts no second demo; single completion, key set once | **PASS** |
+| Production build | `npm run build` | **PASS** — 29 modules; `dist/index.html` 18.89 kB, `index-*.js` 406.24 kB (gzip 130.41), `index-*.css` 10.00 kB; no warnings |
+| No duplicate HTML IDs in built page | `grep -oE 'id="[^"]+"' dist/index.html \| sort \| uniq -c` | **PASS** — single occurrence per ID |
+| No Chart.js CDN in built HTML (Step 11 regression guard) | `grep -c "cdn.jsdelivr.net/npm/chart.js" dist/index.html` | **PASS** — 0 |
+| Step 12 markers in bundle | `grep -cF` over `dist/assets/index-*.js` | **PASS** — `mpl_magic_demo_v4`, `Enter your home price here...`, `scale(1.02)`, `prefers-reduced-motion`, `all 0.5s ease`, demo value `600,000`, `mpl:switch-tab` all present |
+| Built output served | `npm run preview -- --port 5196` + `curl` | **PASS** — page / bundle **200** (server stopped after the check) |
+| No push/merge/deploy | none issued | **PASS** |
+
+### Manual browser checks (PENDING — this agent has no browser access)
+
+1. Fresh session (no `sessionStorage`): on load, the Home Price placeholder types "Enter your home price here..." with the cursor, holds ~3 s, deletes, and loops.
+2. Click into the price field (or type a value) → animation stops at the full text; clear the field and click away → it resumes mid-word, not from the start.
+3. Switch to Extra Payment Magic with the main tab empty → the demo types 600,000 / 450,000 / 120,000 / 6.5 / 30 / 500 over ~2.6 s, P&I auto-fills, the results card gently scales up 1.02× and back; the green savings message appears.
+4. Type into any Magic field mid-demo (or click **Calculate Savings**, or toggle Monthly/One-time) → the demo stops immediately and the user's value is kept.
+5. Reload in the same session and switch to Magic again → the demo does **not** re-run (`mpl_magic_demo_v4` = 1).
+6. Enter a main-tab price first, then switch to Magic → the values sync from the main tab; no demo.
+7. With the OS/DevTools reduced-motion emulation on: placeholder is static text; the Magic demo fills all values at once with no glow.
+8. Switch to Calculator mid-demo → the demo finishes in the background; returning to Magic shows the completed state (no second demo, no double-typed fields).
+9. No console errors in any of the above; the price input's *value* is never touched by the placeholder animation.
+
+### Blockers
+
+**None.** Step 13 (static files, privacy, SEO) is independent of this step.
+
+### Next task
+
+Step 13 — Preserve static files, privacy, and SEO (audit production output, keep all existing public URLs, review privacy wording against actual network behavior — note the Chart.js CDN request that Step 11 removed changes that review).
+
+---
+
+# Overall Migration Status (end of step 12 session)
 
 | Step | Status |
 |------|--------|
@@ -420,5 +512,6 @@ Step 12 — Reintroduce animations and the demo (typewriter intro on the main ta
 | 8 — React-ify the calculator area | ✅ |
 | 9 — Interactive parity (main calculator) | ✅ |
 | 10 — Extra Payment Magic parity | ✅ (browser checks PENDING) |
-| 11 — Integrate the chart | ✅ (this session; browser check PENDING) |
-| 12–16 | ⏳ |
+| 11 — Integrate the chart | ✅ (browser check PENDING) |
+| 12 — Reintroduce animations and the demo | ✅ (this session; browser checks PENDING) |
+| 13–16 | ⏳ |

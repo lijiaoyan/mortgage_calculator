@@ -46,8 +46,23 @@
 // its primitive props, so it only re-renders when a recalculation
 // actually changes the breakdown — the same cadence as the original
 // updateChart().
+//
+// Step 12: the original script.js#initTypewriter placeholder animation
+// on the price input is ported (types "Enter your home price here..."
+// with a "|" cursor, holds 3 s, deletes, pauses 500 ms, repeats; while
+// the field holds a value or has focus it holds the full text and
+// re-checks every second — and, like the original, resumes from where
+// it left off once the field is empty and unfocused again).
+// Step 12 addition: under prefers-reduced-motion the animation is
+// replaced by the static full text. The pending timer is cleared on
+// unmount and on every effect re-run (StrictMode-safe).
+//
+// NOT ported: script.js#runDemo / runDemoOnce (the main-tab value demo
+// gated by sessionStorage `mpl_demo_seen`) — its call site is commented
+// out in the original, so the deployed site never ran it. Porting it
+// would add behavior the original never had.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   parseNumeric,
   parseInterestRate,
@@ -55,6 +70,9 @@ import {
 import { calculateMortgage } from '../lib/mortgage.js';
 import { formatCurrency } from '../lib/formatting.js';
 import PaymentChart from './PaymentChart.jsx';
+
+// Step 12: the exact typewriter text from script.js#initTypewriter.
+const TYPEWRITER_TEXT = 'Enter your home price here...';
 
 const BLANK_RESULT = {
   paymentAmount: '$0',
@@ -173,6 +191,82 @@ export default function PaymentCalculator({
   // Derived on every render — never stored (Step 9 requirement).
   const result = deriveResult(submitted);
 
+  // ── Step 12: price-input placeholder typewriter (script.js#initTypewriter) ──
+  const [pricePlaceholder, setPricePlaceholder] = useState('');
+  const [priceFocused, setPriceFocused] = useState(false);
+  // Step 12 (prefers-reduced-motion): static full text instead of the
+  // animation. jsdom / no-matchMedia environments default to false.
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+  // Read at each tick (written every render) so a value/focus change
+  // never restarts the chain — the original's setTimeout chain kept
+  // running and re-checked itself, resuming mid-word once the field was
+  // empty and unfocused again.
+  const typewriterStoppedRef = useRef(false);
+  typewriterStoppedRef.current = inputs.price !== '' || priceFocused;
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const onChange = () => setPrefersReducedMotion(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      // No placeholder animation: the same full text the stopped state
+      // shows, statically.
+      setPricePlaceholder(TYPEWRITER_TEXT);
+      return undefined;
+    }
+    // Faithful port of the original timing table: 100 ms/char typing with
+    // a trailing "|" cursor, 3000 ms hold at the full message, 50 ms/char
+    // deletion (no cursor), 500 ms pause, repeat.
+    let charIndex = 0;
+    let isDeleting = false;
+    let typeSpeed = 150;
+    let timer = null;
+    function type() {
+      timer = null;
+      if (typewriterStoppedRef.current) {
+        // Original: value present or field focused → hold the full text,
+        // re-check in 1 s (the chain keeps running, so it resumes from
+        // where it left off once the field is empty and unfocused again).
+        setPricePlaceholder(TYPEWRITER_TEXT);
+        timer = setTimeout(type, 1000);
+        return;
+      }
+      const currentText = isDeleting
+        ? TYPEWRITER_TEXT.substring(0, charIndex--)
+        : TYPEWRITER_TEXT.substring(0, charIndex++);
+      setPricePlaceholder(currentText + (isDeleting ? '' : '|'));
+      if (!isDeleting && charIndex > TYPEWRITER_TEXT.length) {
+        isDeleting = true;
+        typeSpeed = 3000; // Long pause at full message
+      } else if (isDeleting && charIndex < 0) {
+        isDeleting = false;
+        charIndex = 0;
+        typeSpeed = 500; // Pause before restarting
+      } else {
+        typeSpeed = isDeleting ? 50 : 100;
+      }
+      timer = setTimeout(type, typeSpeed);
+    }
+    type();
+    return () => {
+      // AGENTS.md: "Clean up timers" — also runs on StrictMode's
+      // double-invoked mount, where it cancels the first chain.
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [prefersReducedMotion]);
+
   // Commit the current draft fields as the new "submitted" snapshot. This
   // is the only place `submitted` is ever written, so its object identity
   // — and therefore the chart effect keyed on it — only changes on the
@@ -229,12 +323,14 @@ export default function PaymentCalculator({
             <input
               type="text"
               id="price"
-              placeholder=""
+              placeholder={pricePlaceholder}
               aria-label="Home Purchase Price"
               value={inputs.price}
               ref={priceInputRef}
               onChange={(e) => onInputChange('price', e.target.value)}
+              onFocus={() => setPriceFocused(true)}
               onBlur={(e) => {
+                setPriceFocused(false);
                 const val = parseNumeric(e.target.value);
                 if (val > 0) onInputChange('price', val.toLocaleString('en-US'));
               }}

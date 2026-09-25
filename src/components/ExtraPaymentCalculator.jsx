@@ -32,11 +32,30 @@
 //   4. Documented deviations (see MIGRATION_STATUS.md, Step 10):
 //      - a validation error resets the result cards to the all-sentinel
 //        values (consistent with the Step 9 main calculator; the
-//        original kept previously displayed values on error);
-//      - the sessionStorage-gated magic demo is NOT ported yet — it is
-//        Step 12's scope. (Step 8 note #3 was wrong to say it was
-//        unreachable in the original: the navExtra handler called
-//        runMagicDemo() whenever the magic price was empty.)
+//        original kept previously displayed values on error).
+//
+// Step 12: the original script.js#runMagicDemo (navExtra-handler-driven,
+// sessionStorage key `mpl_magic_demo_v4`) is now ported, with the Step 12
+// requirements layered on top:
+//   - same demo values/order and the same 40 ms/char + 200 ms pause
+//     cadence, with the P&I auto-fill applied on the original
+//     calculateMagic() ticks (every third char + field completion);
+//   - the session key is set when typing FINISHES, as in the original
+//     (a reload mid-demo re-runs the demo on the next switch);
+//   - every timer is tracked in demoTimerRef and cleared on stop/unmount;
+//   - user interaction (typing, Calculate, mode toggle) stops the demo;
+//   - a second nav click while a demo is running cannot start a second
+//     one (the original would have started a competing chain — latent
+//     bug, not reproduced);
+//   - fields the user already filled are skipped, never cleared (the
+//     original cleared all six before typing — Step 12: "do not overwrite
+//     values the user has entered");
+//   - the original's "clear the fields but keep the stale result" ending
+//     is not possible under the Step 10 derived-on-render pattern
+//     (AGENTS.md: do not store redundant calculated values) — the demo
+//     values REMAIN in the fields so the result stays visible and
+//     consistent with them (F6 resolved, see MIGRATION_STATUS.md);
+//   - prefers-reduced-motion: the values appear all at once, no glow.
 //
 // The DOM structure, CSS classes, and aria attributes are unchanged from
 // Step 8 / the original index.html.
@@ -48,6 +67,21 @@ import {
   applyPIAutoFill,
   CORE_MAGIC_KEYS,
 } from '../lib/extraPayment.js';
+
+// Step 12: the original's demo session key (the "v4" rename forced a
+// one-time reset for existing visitors; it must stay as-is) and the demo
+// values in the original's typing order. `magicTerm` in the original
+// resolved to the LEADING text input (decision F4), hence
+// `magicTermText` here.
+const MAGIC_DEMO_KEY = 'mpl_magic_demo_v4';
+const MAGIC_DEMO_FIELDS = [
+  ['magicPrice', '600,000'],
+  ['magicBalance', '450,000'],
+  ['magicDownPayment', '120,000'],
+  ['magicRate', '6.5'],
+  ['magicTermText', '30'],
+  ['extraAmount', '500'],
+];
 
 export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
   const [magicInputs, setMagicInputs] = useState({
@@ -71,6 +105,135 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
   const [piIsManual, setPiIsManual] = useState(false);
   const magicMonthlyPIRef = useRef(null);
 
+  // ── Step 12: magic demo (script.js#runMagicDemo) ──
+  // The demo is a single setTimeout chain; at most one timer is pending
+  // at any moment, so one ref tracks it. Refs (not state) so the user
+  // handlers and the effect below always see the live value.
+  const demoActiveRef = useRef(false);
+  const demoTimerRef = useRef(null);
+  // 0 = none, 1 = glowing (scale 1.02), 2 = settled back to scale(1).
+  // The original set the inline transition + transform on the results
+  // card directly; the state-driven inline style keeps style.css
+  // untouched (AGENTS.md: reuse the existing CSS).
+  const [demoGlow, setDemoGlow] = useState(0);
+
+  // Step 12: cancel the pending demo timer. Called by the user handlers
+  // (interaction stops the demo) and by the unmount cleanup below
+  // (AGENTS.md: "Clean up timers").
+  function stopDemo() {
+    if (demoTimerRef.current !== null) {
+      clearTimeout(demoTimerRef.current);
+      demoTimerRef.current = null;
+    }
+    demoActiveRef.current = false;
+    // If the user interrupted between the glow start and its settle-back
+    // timer, drop the glow rather than leaving the card scaled up.
+    if (demoGlow !== 0) setDemoGlow(0);
+  }
+
+  function prefersReducedMotion() {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+  }
+
+  // Step 12: type the demo values into the tab. `baseline` is the field
+  // state at the moment the original navExtra handler reached its demo
+  // check (i.e. after the Calculator → Magic sync).
+  function startDemo(baseline) {
+    if (demoActiveRef.current) return; // no competing second chain
+    if (sessionStorage.getItem(MAGIC_DEMO_KEY) === '1') return;
+
+    // Step 12 (prefers-reduced-motion): no typing animation, no glow —
+    // the demo values appear all at once; the session key is set
+    // immediately (nothing left to "finish").
+    if (prefersReducedMotion()) {
+      const next = { ...baseline };
+      MAGIC_DEMO_FIELDS.forEach(([key, val]) => {
+        if (String(next[key]).trim() === '') next[key] = val;
+      });
+      const { inputs: filled } = applyPIAutoFill(next, {
+        force: true,
+        isFocused: piIsFocused(),
+      });
+      setMagicInputs(filled);
+      setPiIsManual(false);
+      sessionStorage.setItem(MAGIC_DEMO_KEY, '1');
+      return;
+    }
+
+    demoActiveRef.current = true;
+    // Original: cleared all six fields before typing. Step 12
+    // requirement: values the user already entered are never cleared or
+    // overwritten — those fields are skipped instead (same 200 ms beat).
+    const demoData = MAGIC_DEMO_FIELDS.map(([key, val]) => ({
+      key,
+      val,
+      skip: String(baseline[key]).trim() !== '',
+    }));
+    // The in-progress field strings; the P&I auto-fill writes into the
+    // same copy so it is carried forward tick by tick.
+    const current = { ...baseline };
+
+    function schedule(fn, ms) {
+      demoTimerRef.current = setTimeout(() => {
+        demoTimerRef.current = null;
+        fn();
+      }, ms);
+    }
+
+    function typeField(index, charIdx) {
+      if (index >= demoData.length) {
+        // Original: the session key is set when typing FINISHES, not at
+        // start — a reload mid-demo re-runs the demo on the next switch.
+        sessionStorage.setItem(MAGIC_DEMO_KEY, '1');
+        demoActiveRef.current = false;
+        // Original: soft glow on the results card — scale(1.02) with a
+        // 0.5 s transition, back to scale(1) 500 ms later.
+        setDemoGlow(1);
+        schedule(() => setDemoGlow(2), 500);
+        return;
+      }
+      const item = demoData[index];
+      if (item.skip) {
+        schedule(() => typeField(index + 1, 0), 200);
+        return;
+      }
+      const targetVal = item.val;
+      if (charIdx <= targetVal.length) {
+        current[item.key] = targetVal.substring(0, charIdx);
+        // Original: calculateMagic() (isPIOverride=false) after every
+        // third character and on field completion → force P&I auto-fill.
+        // applyPIAutoFill no-ops while the form is invalid, exactly like
+        // the original's validation early-return (mid-demo the P&I field
+        // stayed empty until rate + term were both typed).
+        if (charIdx === targetVal.length || charIdx % 3 === 0) {
+          const { inputs: filled } = applyPIAutoFill(current, {
+            force: true,
+            isFocused: piIsFocused(),
+          });
+          if (filled !== current) Object.assign(current, filled);
+          setPiIsManual(false);
+        }
+        setMagicInputs({ ...current });
+        // Original: 40 ms per character ("faster typing for numbers").
+        schedule(() => typeField(index, charIdx + 1), 40);
+      } else {
+        // Original: 200 ms pause between fields.
+        schedule(() => typeField(index + 1, 0), 200);
+      }
+    }
+
+    typeField(0, 0);
+  }
+
+  // AGENTS.md: "Clean up timers" — the unmount cleanup cancels any
+  // in-flight demo chain. (StrictMode-safe: stopDemo is a no-op when no
+  // timer is pending.)
+  useEffect(() => stopDemo, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Derived on every render — never stored (AGENTS.md / Step 9 pattern).
   // The magic tab recalculated live on every input in the original, so
   // the draft strings are the derivation inputs.
@@ -87,6 +250,8 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
   // calculateMagic(false) for the core fields, calculateMagic(true) for
   // the rest. The term select is dead UI (no listener in the original).
   function handleMagicInput(key, value) {
+    stopDemo(); // Step 12: user typing stops the demo (its own writes
+    // bypass this handler, so this can never trip on demo activity).
     const next = { ...magicInputs, [key]: value };
     const isCore = CORE_MAGIC_KEYS.has(key);
     const { inputs: filled, filledPI } = applyPIAutoFill(next, {
@@ -100,6 +265,7 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
   // Original `magicCalcBtn` click: calculateMagic() → isPIOverride=false
   // → contractual P&I re-derived and the field rewritten (unless focused).
   function handleCalculate() {
+    stopDemo(); // Step 12: user interaction stops the demo
     const { inputs: filled } = applyPIAutoFill(magicInputs, {
       force: true,
       isFocused: piIsFocused(),
@@ -111,6 +277,7 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
   // Original extraMonthlyBtn / extraOneTimeBtn: set extraMode, then
   // calculateMagic() (isPIOverride=false) with the new mode in effect.
   function selectExtraMode(mode) {
+    stopDemo(); // Step 12: user interaction stops the demo
     if (mode === extraMode) return;
     setExtraMode(mode);
     const { inputs: filled } = applyPIAutoFill(magicInputs, {
@@ -134,33 +301,45 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
   // (the original navExtra handler had no latch; the "only once" effect
   // came from the "magic price must be empty" gate, so a manually
   // cleared magic price re-syncs on the next switch — preserved).
+  //
+  // Step 12: the original navExtra handler ended with
+  //   if (parseInput(magicPrice.value) <= 0) runMagicDemo();
+  // — i.e. AFTER the sync check, whenever the magic price was (still)
+  // empty. That is exactly "the main tab has no price to sync", so the
+  // demo runs on first-visit style switches and never over a synced
+  // (or user-filled) price.
   useEffect(() => {
     if (seedNonce <= 0) return;
+    let next = magicInputs;
     const mainPrice = parseNumeric(mainInputs.price);
-    if (mainPrice <= 0) return;
-    if (parseNumeric(magicInputs.magicPrice) > 0) return;
-
-    // Original: magicBalance.value = principal.toLocaleString('en-US')
-    // unconditionally (it can be non-positive when down ≥ price); the
-    // validation gate below then rejects the form.
-    const principal = mainPrice - parseNumeric(mainInputs.downPayment);
-    const next = {
-      ...magicInputs,
-      magicPrice: mainInputs.price,
-      magicDownPayment: mainInputs.downPayment,
-      magicBalance: principal.toLocaleString('en-US'),
-      magicRate: mainInputs.rate,
-      magicTermText: String(mainInputs.term || ''),
-      magicTax: mainInputs.tax,
-      magicInsurance: mainInputs.insurance,
-    };
-    // Original: calculateMagic() → isPIOverride=false.
-    const { inputs: filled } = applyPIAutoFill(next, {
-      force: true,
-      isFocused: piIsFocused(),
-    });
-    setMagicInputs(filled);
-    setPiIsManual(false);
+    if (mainPrice > 0 && parseNumeric(magicInputs.magicPrice) <= 0) {
+      // Original: magicBalance.value = principal.toLocaleString('en-US')
+      // unconditionally (it can be non-positive when down ≥ price); the
+      // validation gate below then rejects the form.
+      const principal = mainPrice - parseNumeric(mainInputs.downPayment);
+      next = {
+        ...magicInputs,
+        magicPrice: mainInputs.price,
+        magicDownPayment: mainInputs.downPayment,
+        magicBalance: principal.toLocaleString('en-US'),
+        magicRate: mainInputs.rate,
+        magicTermText: String(mainInputs.term || ''),
+        magicTax: mainInputs.tax,
+        magicInsurance: mainInputs.insurance,
+      };
+      // Original: calculateMagic() → isPIOverride=false.
+      const { inputs: filled } = applyPIAutoFill(next, {
+        force: true,
+        isFocused: piIsFocused(),
+      });
+      next = filled;
+      setMagicInputs(filled);
+      setPiIsManual(false);
+    }
+    // Step 12: the original's demo check, on the post-sync state.
+    if (parseNumeric(next.magicPrice) <= 0) {
+      startDemo(next);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedNonce]);
 
@@ -427,7 +606,20 @@ export default function ExtraPaymentCalculator({ mainInputs, seedNonce }) {
         </div>
       </article>
 
-      <aside className="results-card">
+      {/* Step 12: the original's demo "soft glow" — results.style.transition =
+          "all 0.5s ease"; scale(1.02) → scale(1) 500 ms later. State-driven
+          inline style (same properties the original set inline). */}
+      <aside
+        className="results-card"
+        style={
+          demoGlow === 0
+            ? undefined
+            : {
+                transition: 'all 0.5s ease',
+                transform: demoGlow === 1 ? 'scale(1.02)' : 'scale(1)',
+              }
+        }
+      >
         <div
           className="calc-card"
           style={{
