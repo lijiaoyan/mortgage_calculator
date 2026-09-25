@@ -812,7 +812,56 @@ Step 17 — Review and commit (per `MIGRATION_PLAN.md`: review the diff of each 
 
 ---
 
-# Overall Migration Status (end of step 16 session)
+# Step 17 Detail
+
+## Step 17: Review and commit — ✅ COMPLETE
+
+**Scope honored:** Step 17 is the plan's review discipline — per completed step, review `git diff --stat` / `git diff` / `git status` and commit only intended files; before release, run `git diff before-react-migration..HEAD --stat`. Steps 3–16 each performed their own in-session diff review before committing; this step performs the cross-cutting release review over the whole migration footprint.
+
+### Locating the pre-migration base
+
+The plan's release command references a `before-react-migration` ref that did not exist in this clone (Steps 1–2 are "not recorded in this file / not verifiable" per the Step 3 section). The history was inspected (one merge deep in the past, otherwise linear) and `be6da0c` — "The 'Calculate My Payment' button was fixed.", the last commit of the original vanilla site and the direct parent of `060fc3e` ("migration_plan was created.") — was identified as the pre-migration base. A lightweight local tag `before-react-migration` was created at that commit.
+
+> Note: the Step 14 record referred to `02af58e` as the "pre-migration original", but that commit is actually mid-migration ("Steps 5-7: persistent instructions, Vite setup, extract and test calculation modules"). Its static public files were still pre-migration content, so the byte-for-byte comparisons made against it were valid; the true pre-migration base is `be6da0c`.
+
+### Pre-release CI gate (the exact CI sequence)
+
+| Check | Method | Result |
+|-------|--------|--------|
+| Reproducible install | `npm ci` (fresh) | **PASS** — 0 vulnerabilities |
+| Full unit suite | `npm test` | **PASS** — 6 files, **162/162** |
+| Production build | `npm run build` | **PASS** — 29 modules, no warnings; asset hashes identical to the Step 14/15/16 verified builds |
+| Working tree clean | `git status --short` | **PASS** — empty; nothing uncommitted |
+
+### Release diff review (`git diff before-react-migration..HEAD --stat`)
+
+**37 files, +8,776 / −998.** Every file is an intended migration change; nothing else in the tree differs from the pre-migration base:
+
+| Group | Files | Note |
+|-------|-------|------|
+| Migration docs (new) | `MIGRATION_PLAN.md`, `MIGRATION_STATUS.md`, `MIGRATION_AUDIT.md`, `BASELINE_CASES.md`, `AGENTS.md` | History + agent instructions; kept deliberately (plan: "keep historical details in the migration documents") |
+| React app (new) | `src/main.jsx`, `src/App.jsx`, `src/navBridge.js`, 3 components + 3 component tests, 5 pure libs + 4 lib test suites | All math is pure/UI-free and test-covered |
+| Original app | `index.html` (static calculator markup removed, wording fixes), `script.js` (−579, deleted in Step 16), `style.css` (untouched — correctly absent from the diff, per AGENTS.md "reuse the existing CSS") | |
+| Static assets | `CNAME`, `robots.txt`, `sitemap.xml`, `preview.png`, `googleb4f539193a03794c.html` → `public/` (pure renames, 0-line diffs); `privacy.html` → `public/` (+20, Step 13 wording fixes) | All public URLs preserved |
+| Tooling (new) | `package.json`, `package-lock.json`, `vite.config.js` | |
+| CI | `.github/workflows/deploy.yml` (+32) | Vite build flow (Step 13) + test step / action versions / dispatch restriction (Step 15) |
+| README | `README_watson.md` → `README.md` (renamed; rewritten in Step 16), `README_blake.md` deleted | see finding below |
+| `.gitignore` | Step 6 additions − the stray `y` entry (Step 16) | |
+
+**Finding from the release review (previously committed; no action needed):** the README consolidation (`README_watson.md` → `README.md`, deletion of `README_blake.md`) was done in the **Step 3 commit** (`574e937`, 2026-09-19), not in Steps 13/16. It is already part of reviewed history, and the current `README.md` is the single up-to-date one; recorded here so the release diff review is complete.
+
+### Checkpoint (per `MIGRATION_PLAN.md`)
+
+- "Commit after reviewing each coherent step, rather than waiting until the end" — **satisfied**: 14 migration commits, one per coherent step (Steps 3–17).
+- "Before release: `git diff before-react-migration..HEAD --stat`" — **run and reviewed** (above), from a clean tree, after a fresh `npm ci` + full test + build pass.
+
+### Blockers
+
+**None. All 17 steps of the migration plan are complete.** The only remaining action is the user's release decision: push `watson` to `v1` to trigger the CI deploy, followed by the carried-over live-site checks from Steps 13–15. Per AGENTS.md the agent does not push/merge/deploy.
+
+---
+
+# Overall Migration Status — COMPLETE (end of step 17 session)
 
 | Step | Status |
 |------|--------|
@@ -832,3 +881,4 @@ Step 17 — Review and commit (per `MIGRATION_PLAN.md`: review the diff of each 
 | 14 — Production verification | ✅ (this session; visual + deploy checks PENDING) |
 | 15 — Update GitHub Actions | ✅ (this session; CI run PENDING until the `v1` push) |
 | 16 — Delete legacy files & docs cleanup | ✅ (this session; no pending checks of its own — Step 13/14/15 deploy+visual checks still pending the `v1` push) |
+| 17 — Review and commit | ✅ (this session; `before-react-migration` tag created at `be6da0c`; release diff reviewed: 37 files, +8776/−998, all intended) |
